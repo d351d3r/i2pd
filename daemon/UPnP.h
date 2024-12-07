@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2013-2020, The PurpleI2P Project
+* Copyright (c) 2013-2024, The PurpleI2P Project
 *
 * This file is part of Purple i2pd project and licensed under BSD3
 *
@@ -28,7 +28,8 @@ namespace i2p
 namespace transport
 {
 	const int UPNP_RESPONSE_TIMEOUT = 2000; // in milliseconds
-
+	const int UPNP_PORT_FORWARDING_INTERVAL = 20; // in minutes
+	
 	enum
 	{
 		UPNP_IGD_NONE = 0,
@@ -66,7 +67,7 @@ namespace transport
 			std::unique_ptr<std::thread> m_Thread;
 			std::condition_variable m_Started;
 			std::mutex m_StartedMutex;
-			boost::asio::io_service m_Service;
+			boost::asio::io_context m_Service;
 			boost::asio::deadline_timer m_Timer;
 			bool m_upnpUrlsInitialized = false;
 			struct UPNPUrls m_upnpUrls;

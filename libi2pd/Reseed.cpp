@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2013-2022, The PurpleI2P Project
+* Copyright (c) 2013-2024, The PurpleI2P Project
 *
 * This file is part of Purple i2pd project and licensed under BSD3
 *
@@ -26,6 +26,7 @@
 #include "HTTP.h"
 #include "util.h"
 #include "Config.h"
+#include "Socks5.h"
 
 namespace i2p
 {
@@ -153,7 +154,7 @@ namespace data
 			return ProcessSU3Stream (s);
 		else
 		{
-			LogPrint (eLogError, "Reseed: Can't open file ", filename);
+			LogPrint (eLogCritical, "Reseed: Can't open file ", filename);
 			return 0;
 		}
 	}
@@ -170,7 +171,7 @@ namespace data
 		}
 		else
 		{
-			LogPrint (eLogError, "Reseed: Can't open file ", filename);
+			LogPrint (eLogCritical, "Reseed: Can't open file ", filename);
 			return 0;
 		}
 	}
@@ -278,7 +279,7 @@ namespace data
 
 		if (verify) // not verified
 		{
-			LogPrint (eLogError, "Reseed: SU3 verification failed");
+			LogPrint (eLogCritical, "Reseed: SU3 verification failed");
 			return 0;
 		}
 
@@ -320,7 +321,7 @@ namespace data
 				uint16_t fileNameLength, extraFieldLength;
 				s.read ((char *)&fileNameLength, 2);
 				fileNameLength = le16toh (fileNameLength);
-				if ( fileNameLength > 255 ) {
+				if ( fileNameLength >= 255 ) {
 					// too big
 					LogPrint(eLogError, "Reseed: SU3 fileNameLength too large: ", fileNameLength);
 					return numFiles;
@@ -492,7 +493,7 @@ namespace data
 			SSL_free (ssl);
 		}
 		else
-			LogPrint (eLogError, "Reseed: Can't open certificate file ", filename);
+			LogPrint (eLogCritical, "Reseed: Can't open certificate file ", filename);
 		SSL_CTX_free (ctx);
 	}
 
@@ -534,24 +535,24 @@ namespace data
 				}
 				// check for valid proxy url schema
 				if (proxyUrl.schema != "http" && proxyUrl.schema != "socks") {
-					LogPrint(eLogError, "Reseed: Bad proxy url: ", proxy);
+					LogPrint(eLogCritical, "Reseed: Bad proxy url: ", proxy);
 					return "";
 				}
 			} else {
-				LogPrint(eLogError, "Reseed: Bad proxy url: ", proxy);
+				LogPrint(eLogCritical, "Reseed: Bad proxy url: ", proxy);
 				return "";
 			}
 		}
 		i2p::http::URL url;
 		if (!url.parse(address)) {
-			LogPrint(eLogError, "Reseed: Failed to parse url: ", address);
+			LogPrint(eLogCritical, "Reseed: Failed to parse url: ", address);
 			return "";
 		}
 		url.schema = "https";
 		if (!url.port)
 			url.port = 443;
 
-		boost::asio::io_service service;
+		boost::asio::io_context service;
 		boost::system::error_code ecode;
 
 		boost::asio::ssl::context ctx(boost::asio::ssl::context::sslv23);
@@ -561,11 +562,10 @@ namespace data
 		if(proxyUrl.schema.size())
 		{
 			// proxy connection
-			auto it = boost::asio::ip::tcp::resolver(service).resolve (
-				boost::asio::ip::tcp::resolver::query (proxyUrl.host, std::to_string(proxyUrl.port)), ecode);
+			auto it = boost::asio::ip::tcp::resolver(service).resolve (proxyUrl.host, std::to_string(proxyUrl.port), ecode);
 			if(!ecode)
 			{
-				s.lowest_layer().connect(*it, ecode);
+				s.lowest_layer().connect(*it.begin (), ecode);
 				if(!ecode)
 				{
 					auto & sock = s.next_layer();
@@ -598,7 +598,7 @@ namespace data
 							LogPrint(eLogError, "Reseed: HTTP CONNECT read error: ", ecode.message());
 							return "";
 						}
-						if(proxyRes.parse(boost::asio::buffer_cast<const char *>(readbuf.data()), readbuf.size()) <= 0)
+						if(proxyRes.parse(std::string {boost::asio::buffers_begin(readbuf.data ()), boost::asio::buffers_begin(readbuf.data ()) + readbuf.size ()}) <= 0)
 						{
 							sock.close();
 							LogPrint(eLogError, "Reseed: HTTP CONNECT malformed reply");
@@ -615,62 +615,21 @@ namespace data
 					{
 						// assume socks if not http, is checked before this for other types
 						// TODO: support username/password auth etc
-						uint8_t hs_writebuf[3] = {0x05, 0x01, 0x00};
-						uint8_t hs_readbuf[2];
-						boost::asio::write(sock, boost::asio::buffer(hs_writebuf, 3), boost::asio::transfer_all(), ecode);
-						if(ecode)
+						bool success = false;
+						i2p::transport::Socks5Handshake (sock, std::make_pair(url.host, url.port),
+							[&success](const boost::system::error_code& ec) 
+						    { 
+								if (!ec)
+									success = true;
+								else
+									LogPrint (eLogError, "Reseed: SOCKS handshake failed: ", ec.message());
+							});	
+						service.run (); // execute all async operations
+						if (!success)
 						{
 							sock.close();
-							LogPrint(eLogError, "Reseed: SOCKS handshake write failed: ", ecode.message());
 							return "";
-						}
-						boost::asio::read(sock, boost::asio::buffer(hs_readbuf, 2), ecode);
-						if(ecode)
-						{
-							sock.close();
-							LogPrint(eLogError, "Reseed: SOCKS handshake read failed: ", ecode.message());
-							return "";
-						}
-						size_t sz = 0;
-						uint8_t buf[256];
-
-						buf[0] = 0x05;
-						buf[1] = 0x01;
-						buf[2] = 0x00;
-						buf[3] = 0x03;
-						sz += 4;
-						size_t hostsz = url.host.size();
-						if(1 + 2 + hostsz + sz > sizeof(buf))
-						{
-							sock.close();
-							LogPrint(eLogError, "Reseed: SOCKS handshake failed, hostname too big: ", url.host);
-							return "";
-						}
-						buf[4] = (uint8_t) hostsz;
-						memcpy(buf+5, url.host.c_str(), hostsz);
-						sz += hostsz + 1;
-						htobe16buf(buf+sz, url.port);
-						sz += 2;
-						boost::asio::write(sock, boost::asio::buffer(buf, sz), boost::asio::transfer_all(), ecode);
-						if(ecode)
-						{
-							sock.close();
-							LogPrint(eLogError, "Reseed: SOCKS handshake failed writing: ", ecode.message());
-							return "";
-						}
-						boost::asio::read(sock, boost::asio::buffer(buf, 10), ecode);
-						if(ecode)
-						{
-							sock.close();
-							LogPrint(eLogError, "Reseed: SOCKS handshake failed reading: ", ecode.message());
-							return "";
-						}
-						if(buf[1] != 0x00)
-						{
-							sock.close();
-							LogPrint(eLogError, "Reseed: SOCKS handshake bad reply code: ", std::to_string(buf[1]));
-							return "";
-						}
+						}	
 					}
 				}
 			}
@@ -678,26 +637,32 @@ namespace data
 		else
 		{
 			// direct connection
-			auto it = boost::asio::ip::tcp::resolver(service).resolve (
-				boost::asio::ip::tcp::resolver::query (url.host, std::to_string(url.port)), ecode);
+			auto endpoints = boost::asio::ip::tcp::resolver(service).resolve (url.host, std::to_string(url.port), ecode);
 			if (!ecode)
 			{
 				bool connected = false;
-				boost::asio::ip::tcp::resolver::iterator end;
-				while (it != end)
+				for (const auto& it: endpoints)
 				{
-					boost::asio::ip::tcp::endpoint ep = *it;
-					if ((ep.address ().is_v4 () && i2p::context.SupportsV4 ()) ||
-						(ep.address ().is_v6 () && i2p::context.SupportsV6 ()))
+					boost::asio::ip::tcp::endpoint ep = it;
+					bool supported = false;
+					if (!ep.address ().is_unspecified ())
+					{
+						if (ep.address ().is_v4 ())
+							supported = i2p::context.SupportsV4 ();
+						else if (ep.address ().is_v6 ())
+							supported = i2p::util::net::IsYggdrasilAddress (ep.address ()) ? 
+								i2p::context.SupportsMesh () : i2p::context.SupportsV6 ();
+					}	
+					if (supported)
 					{
 						s.lowest_layer().connect (ep, ecode);
 						if (!ecode)
 						{
+							LogPrint (eLogDebug, "Reseed: Resolved to ", ep.address ());
 							connected = true;
 							break;
 						}
 					}
-					it++;
 				}
 				if (!connected)
 				{
@@ -777,20 +742,44 @@ namespace data
 		if (!url.port) url.port = 80;
 
 		boost::system::error_code ecode;
-		boost::asio::io_service service;
+		boost::asio::io_context service;
 		boost::asio::ip::tcp::socket s(service, boost::asio::ip::tcp::v6());
 
-		if (url.host.length () < 2) return ""; // assume []
-		auto host = url.host.substr (1, url.host.length () - 2);
-		LogPrint (eLogDebug, "Reseed: Connecting to Yggdrasil ", url.host, ":", url.port);
-		s.connect (boost::asio::ip::tcp::endpoint (boost::asio::ip::address_v6::from_string (host), url.port), ecode);
+		auto endpoints = boost::asio::ip::tcp::resolver(service).resolve (url.host, std::to_string(url.port), ecode);
 		if (!ecode)
 		{
-			LogPrint (eLogDebug, "Reseed: Connected to Yggdrasil ", url.host, ":", url.port);
+			bool connected = false;
+			for (const auto& it: endpoints)
+			{
+				boost::asio::ip::tcp::endpoint ep = it;
+				if (
+					i2p::util::net::IsYggdrasilAddress (ep.address ()) &&
+					i2p::context.SupportsMesh ()
+				)
+				{
+					LogPrint (eLogDebug, "Reseed: Yggdrasil: Resolved to ", ep.address ());
+					s.connect (ep, ecode);
+					if (!ecode)
+					{
+						connected = true;
+						break;
+					}
+				}
+			}
+			if (!connected)
+			{
+				LogPrint(eLogError, "Reseed: Yggdrasil: Failed to connect to ", url.host);
+				return "";
+			}
+		}
+
+		if (!ecode)
+		{
+			LogPrint (eLogDebug, "Reseed: Yggdrasil: Connected to ", url.host, ":", url.port);
 			return ReseedRequest (s, url.to_string());
 		}
 		else
-			LogPrint (eLogError, "Reseed: Couldn't connect to Yggdrasil ", url.host, ": ", ecode.message ());
+			LogPrint (eLogError, "Reseed: Yggdrasil: Couldn't connect to ", url.host, ": ", ecode.message ());
 
 		return "";
 	}

@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2013-2021, The PurpleI2P Project
+* Copyright (c) 2013-2024, The PurpleI2P Project
 *
 * This file is part of Purple i2pd project and licensed under BSD3
 *
@@ -19,7 +19,7 @@ namespace i2p
 namespace datagram
 {
 	DatagramDestination::DatagramDestination (std::shared_ptr<i2p::client::ClientDestination> owner, bool gzip):
-		m_Owner (owner), m_Receiver (nullptr), m_RawReceiver (nullptr), m_Gzip (gzip)
+		m_Owner (owner), m_DefaultReceiver (nullptr), m_DefaultRawReceiver (nullptr), m_Gzip (gzip)
 	{
 		if (m_Gzip)
 			m_Deflator.reset (new i2p::data::GzipDeflator);
@@ -119,19 +119,79 @@ namespace datagram
 
 	void DatagramDestination::HandleRawDatagram (uint16_t fromPort, uint16_t toPort, const uint8_t * buf, size_t len)
 	{
-		if (m_RawReceiver)
-			m_RawReceiver (fromPort, toPort, buf, len);
+		auto r = FindRawReceiver(toPort);
+
+		if (r)
+			r (fromPort, toPort, buf, len);
 		else
 			LogPrint (eLogWarning, "DatagramDestination: no receiver for raw datagram");
 	}
 
+	void DatagramDestination::SetReceiver (const Receiver& receiver, uint16_t port)
+	{
+		std::lock_guard<std::mutex> lock(m_ReceiversMutex);
+		m_ReceiversByPorts[port] = receiver;
+		if (!m_DefaultReceiver) {
+			m_DefaultReceiver = receiver;
+			m_DefaultReceiverPort = port;
+		}
+	}
+
+	void DatagramDestination::ResetReceiver (uint16_t port)
+	{
+		std::lock_guard<std::mutex> lock(m_ReceiversMutex);
+		m_ReceiversByPorts.erase (port);
+		if (m_DefaultReceiverPort == port) {
+			m_DefaultReceiver = nullptr;
+			m_DefaultReceiverPort = 0;
+		}
+	}
+
+
+	void DatagramDestination::SetRawReceiver (const RawReceiver& receiver, uint16_t port)
+	{
+		std::lock_guard<std::mutex> lock(m_RawReceiversMutex);
+		m_RawReceiversByPorts[port] = receiver;
+		if (!m_DefaultRawReceiver) {
+			m_DefaultRawReceiver = receiver;
+			m_DefaultRawReceiverPort = port;
+		}
+	}
+
+	void DatagramDestination::ResetRawReceiver (uint16_t port)
+	{
+		std::lock_guard<std::mutex> lock(m_RawReceiversMutex);
+		m_RawReceiversByPorts.erase (port);
+		if (m_DefaultRawReceiverPort == port) {
+			m_DefaultRawReceiver = nullptr;
+			m_DefaultRawReceiverPort = 0;
+		}
+	}
+
+
 	DatagramDestination::Receiver DatagramDestination::FindReceiver(uint16_t port)
 	{
 		std::lock_guard<std::mutex> lock(m_ReceiversMutex);
-		Receiver r = m_Receiver;
+		Receiver r = nullptr;
 		auto itr = m_ReceiversByPorts.find(port);
 		if (itr != m_ReceiversByPorts.end())
 			r = itr->second;
+		else {
+			r = m_DefaultReceiver;
+		}
+		return r;
+	}
+
+	DatagramDestination::RawReceiver DatagramDestination::FindRawReceiver(uint16_t port)
+	{
+		std::lock_guard<std::mutex> lock(m_RawReceiversMutex);
+		RawReceiver r = nullptr;
+		auto itr = m_RawReceiversByPorts.find(port);
+		if (itr != m_RawReceiversByPorts.end())
+			r = itr->second;
+		else {
+			r = m_DefaultRawReceiver;
+		}
 		return r;
 	}
 
@@ -228,8 +288,8 @@ namespace datagram
 
 	DatagramSession::DatagramSession(std::shared_ptr<i2p::client::ClientDestination> localDestination,
 		const i2p::data::IdentHash & remoteIdent) :
-		m_LocalDestination(localDestination),
-		m_RemoteIdent(remoteIdent),
+		m_LocalDestination(localDestination), m_RemoteIdent(remoteIdent),
+		m_LastUse (0), m_LastFlush (0),
 		m_RequestingLS(false)
 	{
 	}
@@ -250,8 +310,12 @@ namespace datagram
 		if (msg || m_SendQueue.empty ())
 			m_SendQueue.push_back(msg);
 		// flush queue right away if full
-		if (!msg || m_SendQueue.size() >= DATAGRAM_SEND_QUEUE_MAX_SIZE)
+		if (!msg || m_SendQueue.size() >= DATAGRAM_SEND_QUEUE_MAX_SIZE || 
+		    m_LastUse > m_LastFlush + DATAGRAM_MAX_FLUSH_INTERVAL)
+		{	
 			FlushSendQueue();
+			m_LastFlush =  m_LastUse;
+		}
 	}
 
 	DatagramSession::Info DatagramSession::GetSessionInfo() const
@@ -284,7 +348,7 @@ namespace datagram
 		if(path)
 			path->updateTime = i2p::util::GetSecondsSinceEpoch ();
 		if (IsRatchets ())
-			SendMsg (nullptr); // send empty message in case if we have some data to send
+			SendMsg (nullptr); // send empty message in case if we don't have some data to send
 	}
 
 	std::shared_ptr<i2p::garlic::GarlicRoutingPath> DatagramSession::GetSharedRoutingPath ()
@@ -323,8 +387,8 @@ namespace datagram
 		}
 
 		auto path = m_RoutingSession->GetSharedRoutingPath();
-		if (path && m_RoutingSession->IsRatchets () &&
-			m_LastUse > m_RoutingSession->GetLastActivityTimestamp ()*1000 + DATAGRAM_SESSION_PATH_TIMEOUT)
+		if (path && m_RoutingSession->IsRatchets () && (m_RoutingSession->CleanupUnconfirmedTags () ||
+			m_LastUse > m_RoutingSession->GetLastActivityTimestamp ()*1000 + DATAGRAM_SESSION_PATH_TIMEOUT))
 		{
 			m_RoutingSession->SetSharedRoutingPath (nullptr);
 			path = nullptr;
@@ -353,7 +417,14 @@ namespace datagram
 					auto sz = ls.size();
 					if (sz)
 					{
-						auto idx = rand() % sz;
+						int idx = -1;
+						if (m_LocalDestination)
+						{
+							auto pool = m_LocalDestination->GetTunnelPool ();
+							if (pool)
+								idx = pool->GetRng ()() % sz;
+						}
+						if (idx < 0) idx = rand () % sz;
 						path->remoteLease = ls[idx];
 					}
 					else
@@ -379,7 +450,14 @@ namespace datagram
 				auto sz = ls.size();
 				if (sz)
 				{
-					auto idx = rand() % sz;
+					int idx = -1;
+					if (m_LocalDestination)
+					{
+						auto pool = m_LocalDestination->GetTunnelPool ();
+						if (pool)
+							idx = pool->GetRng ()() % sz;
+					}
+					if (idx < 0) idx = rand () % sz;
 					path->remoteLease = ls[idx];
 				}
 				else
@@ -425,7 +503,7 @@ namespace datagram
 				if (m)
 					send.push_back(i2p::tunnel::TunnelMessageBlock{i2p::tunnel::eDeliveryTypeTunnel,routingPath->remoteLease->tunnelGateway, routingPath->remoteLease->tunnelID, m});
 			}
-			routingPath->outboundTunnel->SendTunnelDataMsg(send);
+			routingPath->outboundTunnel->SendTunnelDataMsgs(send);
 		}
 		m_SendQueue.clear();
 	}

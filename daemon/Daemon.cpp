@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2013-2022, The PurpleI2P Project
+* Copyright (c) 2013-2024, The PurpleI2P Project
 *
 * This file is part of Purple i2pd project and licensed under BSD3
 *
@@ -150,41 +150,45 @@ namespace util
 
 		bool precomputation; i2p::config::GetOption("precomputation.elgamal", precomputation);
 		bool aesni; i2p::config::GetOption("cpuext.aesni", aesni);
-		bool avx; i2p::config::GetOption("cpuext.avx", avx);
 		bool forceCpuExt; i2p::config::GetOption("cpuext.force", forceCpuExt);
 		bool ssu; i2p::config::GetOption("ssu", ssu);
 		if (!ssu && i2p::config::IsDefault ("precomputation.elgamal"))
 			precomputation = false; // we don't elgamal table if no ssu, unless it's specified explicitly
-		i2p::crypto::InitCrypto (precomputation, aesni, avx, forceCpuExt);
+		i2p::crypto::InitCrypto (precomputation, aesni, forceCpuExt);
 
 		i2p::transport::InitAddressFromIface (); // get address4/6 from interfaces
 
 		int netID; i2p::config::GetOption("netid", netID);
 		i2p::context.SetNetID (netID);
+
+		bool checkReserved; i2p::config::GetOption("reservedrange", checkReserved);
+		i2p::transport::transports.SetCheckReserved(checkReserved);
+
 		i2p::context.Init ();
 
 		i2p::transport::InitTransports ();
 
-		bool transit; i2p::config::GetOption("notransit", transit);
-		i2p::context.SetAcceptsTunnels (!transit);
-		uint16_t transitTunnels; i2p::config::GetOption("limits.transittunnels", transitTunnels);
-		SetMaxNumTransitTunnels (transitTunnels);
-
 		bool isFloodfill; i2p::config::GetOption("floodfill", isFloodfill);
-		if (isFloodfill) {
+		if (isFloodfill)
+		{
 			LogPrint(eLogInfo, "Daemon: Router configured as floodfill");
 			i2p::context.SetFloodfill (true);
 		}
 		else
-		{
 			i2p::context.SetFloodfill (false);
-		}
+
+		bool transit; i2p::config::GetOption("notransit", transit);
+		i2p::context.SetAcceptsTunnels (!transit);
+		uint32_t transitTunnels; i2p::config::GetOption("limits.transittunnels", transitTunnels);
+		if (isFloodfill && i2p::config::IsDefault ("limits.transittunnels"))
+			transitTunnels *= 2; // double default number of transit tunnels for floodfill
+		i2p::tunnel::tunnels.SetMaxNumTransitTunnels (transitTunnels);
 
 		/* this section also honors 'floodfill' flag, if set above */
 		std::string bandwidth; i2p::config::GetOption("bandwidth", bandwidth);
 		if (bandwidth.length () > 0)
 		{
-			if (bandwidth[0] >= 'K' && bandwidth[0] <= 'X')
+			if (bandwidth.length () == 1 && ((bandwidth[0] >= 'K' && bandwidth[0] <= 'P') || bandwidth[0] == 'X' ))
 			{
 				i2p::context.SetBandwidth (bandwidth[0]);
 				LogPrint(eLogInfo, "Daemon: Bandwidth set to ", i2p::context.GetBandwidthLimit (), "KBps");
@@ -268,7 +272,7 @@ namespace util
 		if (hidden)
 		{
 			LogPrint(eLogInfo, "Daemon: Hidden mode enabled");
-			i2p::data::netdb.SetHidden(true);
+			i2p::context.SetHidden(true);
 		}
 
 		std::string httpLang; i2p::config::GetOption("http.lang", httpLang);
@@ -298,19 +302,16 @@ namespace util
 
 		bool ntcp2; i2p::config::GetOption("ntcp2.enabled", ntcp2);
 		bool ssu2; i2p::config::GetOption("ssu2.enabled", ssu2);
-		bool ssu; i2p::config::GetOption("ssu", ssu);
-		bool checkInReserved; i2p::config::GetOption("reservedrange", checkInReserved);
 		LogPrint(eLogInfo, "Daemon: Starting Transports");
-		if(!ssu) LogPrint(eLogInfo, "Daemon: SSU disabled");
+		if(!ssu2) LogPrint(eLogInfo, "Daemon: SSU2 disabled");
 		if(!ntcp2) LogPrint(eLogInfo, "Daemon: NTCP2 disabled");
 
-		i2p::transport::transports.SetCheckReserved(checkInReserved);
-		i2p::transport::transports.Start(ntcp2, ssu, ssu2);
-		if (i2p::transport::transports.IsBoundSSU() || i2p::transport::transports.IsBoundSSU2() || i2p::transport::transports.IsBoundNTCP2())
+		i2p::transport::transports.Start(ntcp2, ssu2);
+		if (i2p::transport::transports.IsBoundSSU2() || i2p::transport::transports.IsBoundNTCP2())
 			LogPrint(eLogInfo, "Daemon: Transports started");
 		else
 		{
-			LogPrint(eLogError, "Daemon: Failed to start Transports");
+			LogPrint(eLogCritical, "Daemon: Failed to start Transports");
 			/** shut down netdb right away */
 			i2p::transport::transports.Stop();
 			i2p::data::netdb.Stop();
@@ -329,14 +330,16 @@ namespace util
 			}
 			catch (std::exception& ex)
 			{
-				LogPrint (eLogError, "Daemon: Failed to start Webconsole: ", ex.what ());
+				LogPrint (eLogCritical, "Daemon: Failed to start Webconsole: ", ex.what ());
 				ThrowFatal ("Unable to start webconsole at ", httpAddr, ":", httpPort, ": ", ex.what ());
 			}
 		}
 
-
 		LogPrint(eLogInfo, "Daemon: Starting Tunnels");
 		i2p::tunnel::tunnels.Start();
+
+		LogPrint(eLogInfo, "Daemon: Starting Router context");
+		i2p::context.Start();
 
 		LogPrint(eLogInfo, "Daemon: Starting Client");
 		i2p::client::context.Start ();
@@ -354,7 +357,7 @@ namespace util
 			}
 			catch (std::exception& ex)
 			{
-				LogPrint (eLogError, "Daemon: Failed to start I2PControl: ", ex.what ());
+				LogPrint (eLogCritical, "Daemon: Failed to start I2PControl: ", ex.what ());
 				ThrowFatal ("Unable to start I2PControl service at ", i2pcpAddr, ":", i2pcpPort, ": ", ex.what ());
 			}
 		}
@@ -366,6 +369,8 @@ namespace util
 		LogPrint(eLogInfo, "Daemon: Shutting down");
 		LogPrint(eLogInfo, "Daemon: Stopping Client");
 		i2p::client::context.Stop();
+		LogPrint(eLogInfo, "Daemon: Stopping Router context");
+		i2p::context.Stop();
 		LogPrint(eLogInfo, "Daemon: Stopping Tunnels");
 		i2p::tunnel::tunnels.Stop();
 

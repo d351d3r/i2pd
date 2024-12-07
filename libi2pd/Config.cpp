@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2013-2022, The PurpleI2P Project
+* Copyright (c) 2013-2024, The PurpleI2P Project
 *
 * This file is part of Purple i2pd project and licensed under BSD3
 *
@@ -45,7 +45,7 @@ namespace config {
 			("logclftime", bool_switch()->default_value(false),               "Write full CLF-formatted date and time to log (default: disabled, write only time)")
 			("family", value<std::string>()->default_value(""),               "Specify a family, router belongs to")
 			("datadir", value<std::string>()->default_value(""),              "Path to storage of i2pd data (RI, keys, peer profiles, ...)")
-			("host", value<std::string>()->default_value("0.0.0.0"),          "External IP")
+			("host", value<std::string>()->default_value(""),                 "External IP")
 			("ifname", value<std::string>()->default_value(""),               "Network interface to bind to")
 			("ifname4", value<std::string>()->default_value(""),              "Network interface to bind to for ipv4")
 			("ifname6", value<std::string>()->default_value(""),              "Network interface to bind to for ipv6")
@@ -64,7 +64,7 @@ namespace config {
 			("bandwidth", value<std::string>()->default_value(""),            "Transit traffic bandwidth limit: integer in KBps or letters: L (32), O (256), P (2048), X (>9000)")
 			("share", value<int>()->default_value(100),                       "Limit of transit traffic from max bandwidth in percents. (default: 100)")
 			("ntcp", bool_switch()->default_value(false),                     "Ignored. Always false")
-			("ssu", bool_switch()->default_value(false),                      "Enable SSU transport (default: disabled)")
+			("ssu", bool_switch()->default_value(false),                      "Ignored. Always false")
 			("ntcpproxy", value<std::string>()->default_value(""),            "Ignored")
 #ifdef _WIN32
 			("svcctl", value<std::string>()->default_value(""),               "Ignored")
@@ -77,7 +77,8 @@ namespace config {
 		limits.add_options()
 			("limits.coresize", value<uint32_t>()->default_value(0),          "Maximum size of corefile in Kb (0 - use system limit)")
 			("limits.openfiles", value<uint16_t>()->default_value(0),         "Maximum number of open files (0 - use system default)")
-			("limits.transittunnels", value<uint16_t>()->default_value(2500), "Maximum active transit sessions (default:2500)")
+			("limits.transittunnels", value<uint32_t>()->default_value(10000), "Maximum active transit tunnels (default:10000)")
+			("limits.zombies", value<double>()->default_value(0),             "Minimum percentage of successfully created tunnels under which tunnel cleanup is paused (default [%]: 0.00)")
 			("limits.ntcpsoft", value<uint16_t>()->default_value(0),          "Ignored")
 			("limits.ntcphard", value<uint16_t>()->default_value(0),          "Ignored")
 			("limits.ntcpthreads", value<uint16_t>()->default_value(1),       "Ignored")
@@ -95,6 +96,7 @@ namespace config {
 			("http.hostname", value<std::string>()->default_value("localhost"), "Expected hostname for WebUI")
 			("http.webroot", value<std::string>()->default_value("/"),          "WebUI root path (default: / )")
 			("http.lang", value<std::string>()->default_value("english"),       "WebUI language (default: english )")
+			("http.showTotalTCSR", value<bool>()->default_value(false),         "Show additional value with total TCSR since router's start (default: false)")
 		;
 
 		options_description httpproxy("HTTP Proxy options");
@@ -115,9 +117,14 @@ namespace config {
 			("httpproxy.latency.max", value<std::string>()->default_value("0"),       "HTTP proxy max latency for tunnels")
 			("httpproxy.outproxy", value<std::string>()->default_value(""),           "HTTP proxy upstream out proxy url")
 			("httpproxy.addresshelper", value<bool>()->default_value(true),           "Enable or disable addresshelper")
+			("httpproxy.senduseragent", value<bool>()->default_value(false),          "Pass through user's User-Agent if enabled. Disabled by deafult")
 			("httpproxy.i2cp.leaseSetType", value<std::string>()->default_value("3"), "Local destination's LeaseSet type")
 			("httpproxy.i2cp.leaseSetEncType", value<std::string>()->default_value("0,4"), "Local destination's LeaseSet encryption type")
 			("httpproxy.i2cp.leaseSetPrivKey", value<std::string>()->default_value(""), "LeaseSet private key")
+			("httpproxy.i2p.streaming.maxOutboundSpeed", value<std::string>()->default_value("1730000000"), "Max outbound speed of HTTP proxy stream in bytes/sec")
+			("httpproxy.i2p.streaming.maxInboundSpeed", value<std::string>()->default_value("1730000000"), "Max inbound speed of HTTP proxy stream in bytes/sec")
+			("httpproxy.i2p.streaming.profile", value<std::string>()->default_value("1"), "HTTP Proxy bandwidth usage profile. 1 - bulk(high), 2- interactive(low)")
+
 		;
 
 		options_description socksproxy("SOCKS Proxy options");
@@ -142,13 +149,17 @@ namespace config {
 			("socksproxy.i2cp.leaseSetType", value<std::string>()->default_value("3"), "Local destination's LeaseSet type")
 			("socksproxy.i2cp.leaseSetEncType", value<std::string>()->default_value("0,4"), "Local destination's LeaseSet encryption type")
 			("socksproxy.i2cp.leaseSetPrivKey", value<std::string>()->default_value(""), "LeaseSet private key")
+			("socksproxy.i2p.streaming.maxOutboundSpeed", value<std::string>()->default_value("1730000000"), "Max outbound speed of SOCKS proxy stream in bytes/sec")
+			("socksproxy.i2p.streaming.maxInboundSpeed", value<std::string>()->default_value("1730000000"), "Max inbound speed of SOCKS proxy stream in bytes/sec")
+			("socksproxy.i2p.streaming.profile", value<std::string>()->default_value("1"), "SOCKS Proxy bandwidth usage profile. 1 - bulk(high), 2- interactive(low)")
 		;
 
 		options_description sam("SAM bridge options");
 		sam.add_options()
 			("sam.enabled", value<bool>()->default_value(true),               "Enable or disable SAM Application bridge")
 			("sam.address", value<std::string>()->default_value("127.0.0.1"), "SAM listen address")
-			("sam.port", value<uint16_t>()->default_value(7656),              "SAM listen port")
+			("sam.port", value<uint16_t>()->default_value(7656),              "SAM listen TCP port")
+			("sam.portudp", value<uint16_t>()->default_value(0),              "SAM listen UDP port")
 			("sam.singlethread", value<bool>()->default_value(true),          "Sessions run in the SAM bridge's thread")
 		;
 
@@ -165,6 +176,8 @@ namespace config {
 			("i2cp.address", value<std::string>()->default_value("127.0.0.1"), "I2CP listen address")
 			("i2cp.port", value<uint16_t>()->default_value(7654),              "I2CP listen port")
 			("i2cp.singlethread", value<bool>()->default_value(true),          "Destinations run in the I2CP server's thread")
+			("i2cp.inboundlimit", value<uint32_t>()->default_value(0),         "Client inbound limit in KBps to return in BandwidthLimitsMessage. Router's bandwidth by default")
+			("i2cp.outboundlimit", value<uint32_t>()->default_value(0),        "Client outbound limit in KBps to return in BandwidthLimitsMessage. Router's bandwidth by default")
 		;
 
 		options_description i2pcontrol("I2PControl options");
@@ -190,7 +203,7 @@ namespace config {
 		options_description precomputation("Precomputation options");
 		precomputation.add_options()
 			("precomputation.elgamal",
-#if defined(__x86_64__)
+#if (defined(_M_AMD64) || defined(__x86_64__))
 				value<bool>()->default_value(false),
 #else
 				value<bool>()->default_value(true),
@@ -202,7 +215,7 @@ namespace config {
 		reseed.add_options()
 			("reseed.verify", value<bool>()->default_value(false),        "Verify .su3 signature")
 			("reseed.threshold", value<uint16_t>()->default_value(25),    "Minimum number of known routers before requesting reseed")
-			("reseed.floodfill", value<std::string>()->default_value(""), "Path to router info of floodfill to reseed from")
+			("reseed.floodfill", value<std::string>()->default_value(""), "Ignored. Always empty")
 			("reseed.file", value<std::string>()->default_value(""),      "Path to local .su3 file or HTTPS URL to reseed from")
 			("reseed.zipfile", value<std::string>()->default_value(""),   "Path to local .zip file to reseed from")
 			("reseed.proxy", value<std::string>()->default_value(""),     "url for reseed proxy, supports http/socks")
@@ -214,16 +227,17 @@ namespace config {
 				"https://reseed.onion.im/,"
 				"https://i2pseed.creativecowpat.net:8443/,"
 				"https://reseed.i2pgit.org/,"
-				"https://i2p.novg.net/,"
 				"https://banana.incognet.io/,"
 				"https://reseed-pl.i2pd.xyz/,"
-				"https://www2.mk16.de/"
+				"https://www2.mk16.de/,"
+			    "https://i2p.ghativega.in/,"
+			    "https://i2p.novg.net/,"
+            	"https://reseed.stormycloud.org/"
 			),                                                            "Reseed URLs, separated by comma")
 			("reseed.yggurls", value<std::string>()->default_value(
 				"http://[324:71e:281a:9ed3::ace]:7070/,"
 				"http://[301:65b9:c7cd:9a36::1]:18801/,"
 				"http://[320:8936:ec1a:31f1::216]/,"
-				"http://[306:3834:97b9:a00a::1]/,"
 				"http://[316:f9e0:f22e:a74f::216]/"
 			),                                                            "Reseed URLs through the Yggdrasil, separated by comma")
 		;
@@ -277,11 +291,14 @@ namespace config {
 			("ssu2.enabled", value<bool>()->default_value(true),         "Enable SSU2 (default: enabled)")
 			("ssu2.published", value<bool>()->default_value(true),        "Publish SSU2 (default: enabled)")
 			("ssu2.port", value<uint16_t>()->default_value(0),            "Port to listen for incoming SSU2 packets (default: auto)")
+			("ssu2.mtu4", value<uint16_t>()->default_value(0),            "MTU for ipv4 address (default: detect)")
+			("ssu2.mtu6", value<uint16_t>()->default_value(0),            "MTU for ipv6 address (default: detect)")
+			("ssu2.proxy", value<std::string>()->default_value(""),       "Socks5 proxy URL for SSU2 transport")
 		;
 
 		options_description nettime("Time sync options");
 		nettime.add_options()
-			("nettime.enabled", value<bool>()->default_value(false),       "Disable time sync (default: disabled)")
+			("nettime.enabled", value<bool>()->default_value(false),       "Enable NTP time sync (default: disabled)")
 			("nettime.ntpservers", value<std::string>()->default_value(
 				"0.pool.ntp.org,"
 				"1.pool.ntp.org,"
@@ -301,7 +318,7 @@ namespace config {
 		options_description cpuext("CPU encryption extensions options");
 		cpuext.add_options()
 			("cpuext.aesni", bool_switch()->default_value(true),                     "Use auto detection for AESNI CPU extensions. If false, AESNI will be not used")
-			("cpuext.avx", bool_switch()->default_value(true),                       "Use auto detection for AVX CPU extensions. If false, AVX will be not used")
+			("cpuext.avx", bool_switch()->default_value(false),                      "Deprecated option")
 			("cpuext.force", bool_switch()->default_value(false),                    "Force usage of CPU extensions. Useful when cpuinfo is not available on virtual machines")
 		;
 

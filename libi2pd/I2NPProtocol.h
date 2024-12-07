@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2013-2021, The PurpleI2P Project
+* Copyright (c) 2013-2024, The PurpleI2P Project
 *
 * This file is part of Purple i2pd project and licensed under BSD3
 *
@@ -11,8 +11,10 @@
 
 #include <inttypes.h>
 #include <string.h>
-#include <set>
+#include <unordered_set>
 #include <memory>
+#include <list>
+#include <functional>
 #include "Crypto.h"
 #include "I2PEndian.h"
 #include "Identity.h"
@@ -46,6 +48,11 @@ namespace i2p
 	const size_t DELIVERY_STATUS_MSGID_OFFSET = 0;
 	const size_t DELIVERY_STATUS_TIMESTAMP_OFFSET = DELIVERY_STATUS_MSGID_OFFSET + 4;
 	const size_t DELIVERY_STATUS_SIZE = DELIVERY_STATUS_TIMESTAMP_OFFSET + 8;
+
+	// TunnelTest
+	const size_t TUNNEL_TEST_MSGID_OFFSET = 0;
+	const size_t TUNNEL_TEST_TIMESTAMP_OFFSET = TUNNEL_TEST_MSGID_OFFSET + 4;
+	const size_t TUNNEL_TEST_SIZE = TUNNEL_TEST_TIMESTAMP_OFFSET + 8;
 
 	// DatabaseStore
 	const size_t DATABASE_STORE_KEY_OFFSET = 0;
@@ -101,7 +108,6 @@ namespace i2p
 
 	enum I2NPMessageType
 	{
-		eI2NPDummyMsg = 0,
 		eI2NPDatabaseStore = 1,
 		eI2NPDatabaseLookup = 2,
 		eI2NPDatabaseSearchReply = 3,
@@ -115,7 +121,8 @@ namespace i2p
 		eI2NPVariableTunnelBuild = 23,
 		eI2NPVariableTunnelBuildReply = 24,
 		eI2NPShortTunnelBuild = 25,
-		eI2NPShortTunnelBuildReply = 26
+		eI2NPShortTunnelBuildReply = 26,
+		eI2NPTunnelTest = 231
 	};
 
 	const uint8_t TUNNEL_BUILD_RECORD_GATEWAY_FLAG = 0x80;
@@ -138,8 +145,16 @@ namespace tunnel
 	class TunnelPool;
 }
 
+	const int CONGESTION_LEVEL_MEDIUM = 70;
+	const int CONGESTION_LEVEL_HIGH = 90;
+	const int CONGESTION_LEVEL_FULL = 100;
+
 	const size_t I2NP_MAX_MESSAGE_SIZE = 62708;
 	const size_t I2NP_MAX_SHORT_MESSAGE_SIZE = 4096;
+	const size_t I2NP_MAX_MEDIUM_MESSAGE_SIZE = 16384;
+	const unsigned int I2NP_MESSAGE_LOCAL_EXPIRATION_TIMEOUT_FACTOR = 3; // multiples of RTT
+	const unsigned int I2NP_MESSAGE_LOCAL_EXPIRATION_TIMEOUT_MIN = 200000; // in microseconds
+	const unsigned int I2NP_MESSAGE_LOCAL_EXPIRATION_TIMEOUT_MAX = 2000000; // in microseconds
 	const unsigned int I2NP_MESSAGE_EXPIRATION_TIMEOUT = 8000; // in milliseconds (as initial RTT)
 	const unsigned int I2NP_MESSAGE_CLOCK_SKEW = 60*1000; // 1 minute in milliseconds
 
@@ -148,9 +163,11 @@ namespace tunnel
 		uint8_t * buf;
 		size_t len, offset, maxLen;
 		std::shared_ptr<i2p::tunnel::InboundTunnel> from;
+		std::function<void ()> onDrop;
+		uint64_t enqueueTime; // monotonic microseconds
 
-		I2NPMessage (): buf (nullptr),len (I2NP_HEADER_SIZE + 2),
-			offset(2), maxLen (0), from (nullptr) {}; // reserve 2 bytes for NTCP header
+		I2NPMessage (): buf (nullptr), len (I2NP_HEADER_SIZE + 2),
+			offset(2), maxLen (0), from (nullptr), enqueueTime (0) {}; // reserve 2 bytes for NTCP header
 
 		// header accessors
 		uint8_t * GetHeader () { return GetBuffer (); };
@@ -160,7 +177,9 @@ namespace tunnel
 		void SetMsgID (uint32_t msgID) { htobe32buf (GetHeader () + I2NP_HEADER_MSGID_OFFSET, msgID); };
 		uint32_t GetMsgID () const { return bufbe32toh (GetHeader () + I2NP_HEADER_MSGID_OFFSET); };
 		void SetExpiration (uint64_t expiration) { htobe64buf (GetHeader () + I2NP_HEADER_EXPIRATION_OFFSET, expiration); };
+		void SetEnqueueTime (uint64_t mts) { enqueueTime = mts; };
 		uint64_t GetExpiration () const { return bufbe64toh (GetHeader () + I2NP_HEADER_EXPIRATION_OFFSET); };
+		uint64_t GetEnqueueTime () const { return enqueueTime; };
 		void SetSize (uint16_t size) { htobe16buf (GetHeader () + I2NP_HEADER_SIZE_OFFSET, size); };
 		uint16_t GetSize () const { return bufbe16toh (GetHeader () + I2NP_HEADER_SIZE_OFFSET); };
 		void UpdateSize () { SetSize (GetPayloadLength ()); };
@@ -240,7 +259,6 @@ namespace tunnel
 			SetSize (len - offset - I2NP_HEADER_SIZE);
 			SetChks (0);
 		}
-
 		void ToNTCP2 ()
 		{
 			uint8_t * ntcp2 = GetNTCP2Header ();
@@ -251,6 +269,9 @@ namespace tunnel
 		void FillI2NPMessageHeader (I2NPMessageType msgType, uint32_t replyMsgID = 0, bool checksum = true);
 		void RenewI2NPMessageHeader ();
 		bool IsExpired () const;
+		bool IsExpired (uint64_t ts) const; // in milliseconds
+
+		void Drop () { if (onDrop) { onDrop (); onDrop = nullptr; }; }
 	};
 
 	template<int sz>
@@ -262,6 +283,7 @@ namespace tunnel
 
 	std::shared_ptr<I2NPMessage> NewI2NPMessage ();
 	std::shared_ptr<I2NPMessage> NewI2NPShortMessage ();
+	std::shared_ptr<I2NPMessage> NewI2NPMediumMessage ();
 	std::shared_ptr<I2NPMessage> NewI2NPTunnelMessage (bool endpoint);
 	std::shared_ptr<I2NPMessage> NewI2NPMessage (size_t len);
 
@@ -269,11 +291,12 @@ namespace tunnel
 	std::shared_ptr<I2NPMessage> CreateI2NPMessage (const uint8_t * buf, size_t len, std::shared_ptr<i2p::tunnel::InboundTunnel> from = nullptr);
 	std::shared_ptr<I2NPMessage> CopyI2NPMessage (std::shared_ptr<I2NPMessage> msg);
 
+	std::shared_ptr<I2NPMessage> CreateTunnelTestMsg (uint32_t msgID);
 	std::shared_ptr<I2NPMessage> CreateDeliveryStatusMsg (uint32_t msgID);
 	std::shared_ptr<I2NPMessage> CreateRouterInfoDatabaseLookupMsg (const uint8_t * key, const uint8_t * from,
-		uint32_t replyTunnelID, bool exploratory = false, std::set<i2p::data::IdentHash> * excludedPeers = nullptr);
+		uint32_t replyTunnelID, bool exploratory = false, std::unordered_set<i2p::data::IdentHash> * excludedPeers = nullptr);
 	std::shared_ptr<I2NPMessage> CreateLeaseSetDatabaseLookupMsg (const i2p::data::IdentHash& dest,
-		const std::set<i2p::data::IdentHash>& excludedFloodfills,
+		const std::unordered_set<i2p::data::IdentHash>& excludedFloodfills,
 		std::shared_ptr<const i2p::tunnel::InboundTunnel> replyTunnel,
 		const uint8_t * replyKey, const uint8_t * replyTag, bool replyECIES = false);
 	std::shared_ptr<I2NPMessage> CreateDatabaseSearchReply (const i2p::data::IdentHash& ident, std::vector<i2p::data::IdentHash> routers);
@@ -293,7 +316,6 @@ namespace tunnel
 	std::shared_ptr<I2NPMessage> CreateTunnelGatewayMsg (uint32_t tunnelID, std::shared_ptr<I2NPMessage> msg);
 
 	size_t GetI2NPMessageLength (const uint8_t * msg, size_t len);
-	void HandleI2NPMessage (uint8_t * msg, size_t len);
 	void HandleI2NPMessage (std::shared_ptr<I2NPMessage> msg);
 
 	class I2NPMessagesHandler
@@ -306,12 +328,8 @@ namespace tunnel
 
 		private:
 
-			std::vector<std::shared_ptr<I2NPMessage> > m_TunnelMsgs, m_TunnelGatewayMsgs;
+			std::list<std::shared_ptr<I2NPMessage> > m_TunnelMsgs, m_TunnelGatewayMsgs;
 	};
-
-	const uint16_t DEFAULT_MAX_NUM_TRANSIT_TUNNELS = 2500;
-	void SetMaxNumTransitTunnels (uint16_t maxNumTransitTunnels);
-	uint16_t GetMaxNumTransitTunnels ();
 }
 
 #endif

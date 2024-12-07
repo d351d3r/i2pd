@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2013-2022, The PurpleI2P Project
+* Copyright (c) 2013-2024, The PurpleI2P Project
 *
 * This file is part of Purple i2pd project and licensed under BSD3
 *
@@ -112,7 +112,7 @@ namespace util
 	};
 
 	template<class T>
-	class MemoryPoolMt: public MemoryPool<T>
+	class MemoryPoolMt: private MemoryPool<T>
 	{
 		public:
 
@@ -129,6 +129,14 @@ namespace util
 			{
 				std::lock_guard<std::mutex> l(m_Mutex);
 				this->Release (t);
+			}
+
+			void ReleaseMt (T * * arr, size_t num)
+			{
+				if (!arr || !num) return;
+				std::lock_guard<std::mutex> l(m_Mutex);
+				for (size_t i = 0; i < num; i++)
+					this->Release (arr[i]);
 			}
 
 			template<template<typename, typename...>class C, typename... R>
@@ -169,11 +177,13 @@ namespace util
 			RunnableService (const std::string& name): m_Name (name), m_IsRunning (false) {}
 			virtual ~RunnableService () {}
 
-			boost::asio::io_service& GetIOService () { return m_Service; }
+			auto& GetIOService () { return m_Service; }
 			bool IsRunning () const { return m_IsRunning; };
 
 			void StartIOService ();
 			void StopIOService ();
+
+			void SetName (std::string_view name);
 
 		private:
 
@@ -184,7 +194,7 @@ namespace util
 			std::string m_Name;
 			volatile bool m_IsRunning;
 			std::unique_ptr<std::thread> m_Thread;
-			boost::asio::io_service m_Service;
+			boost::asio::io_context m_Service;
 	};
 
 	class RunnableServiceWithWork: public RunnableService
@@ -192,11 +202,11 @@ namespace util
 		protected:
 
 			RunnableServiceWithWork (const std::string& name):
-				RunnableService (name), m_Work (GetIOService ()) {}
+				RunnableService (name), m_Work (GetIOService ().get_executor ()) {}
 
 		private:
 
-			boost::asio::io_service::work m_Work;
+			boost::asio::executor_work_guard<boost::asio::io_context::executor_type> m_Work;
 	};
 
 	void SetThreadName (const char *name);
@@ -224,6 +234,7 @@ namespace util
 		bool IsLocalAddress (const boost::asio::ip::address& addr);
 		bool IsInReservedRange (const boost::asio::ip::address& host);
 		bool IsYggdrasilAddress (const boost::asio::ip::address& addr);
+		bool IsPortInReservedRange (const uint16_t port) noexcept;
 	}
 }
 }

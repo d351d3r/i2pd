@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2013-2021, The PurpleI2P Project
+* Copyright (c) 2013-2023, The PurpleI2P Project
 *
 * This file is part of Purple i2pd project and licensed under BSD3
 *
@@ -72,8 +72,9 @@ namespace client
 	bool MatchedTunnelDestination::SelectPeers(i2p::tunnel::Path & path, int hops, bool inbound)
 	{
 		auto pool = GetTunnelPool();
-		if(!i2p::tunnel::StandardSelectPeers(path, hops, inbound,
-			std::bind(&i2p::tunnel::TunnelPool::SelectNextHop, pool, std::placeholders::_1, std::placeholders::_2)))
+		if(!pool || !pool->StandardSelectPeers(path, hops, inbound,
+			std::bind(&i2p::tunnel::TunnelPool::SelectNextHop, pool, std::placeholders::_1, 
+				std::placeholders::_2, std::placeholders::_3)))
 			return false;
 		// more here for outbound tunnels
 		if(!inbound && m_RemoteLeaseSet)

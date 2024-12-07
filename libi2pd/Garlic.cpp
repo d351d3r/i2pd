@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2013-2022, The PurpleI2P Project
+* Copyright (c) 2013-2024, The PurpleI2P Project
 *
 * This file is part of Purple i2pd project and licensed under BSD3
 *
@@ -45,22 +45,17 @@ namespace garlic
 	{
 		if (!m_SharedRoutingPath) return nullptr;
 		uint32_t ts = i2p::util::GetSecondsSinceEpoch ();
-		if (m_SharedRoutingPath->numTimesUsed >= ROUTING_PATH_MAX_NUM_TIMES_USED ||
-			!m_SharedRoutingPath->outboundTunnel->IsEstablished () ||
+		if (!m_SharedRoutingPath->outboundTunnel->IsEstablished () ||
 			ts*1000LL > m_SharedRoutingPath->remoteLease->endDate ||
 			ts > m_SharedRoutingPath->updateTime + ROUTING_PATH_EXPIRATION_TIMEOUT)
 				m_SharedRoutingPath = nullptr;
-		if (m_SharedRoutingPath) m_SharedRoutingPath->numTimesUsed++;
 		return m_SharedRoutingPath;
 	}
 
 	void GarlicRoutingSession::SetSharedRoutingPath (std::shared_ptr<GarlicRoutingPath> path)
 	{
 		if (path && path->outboundTunnel && path->remoteLease)
-		{
 			path->updateTime = i2p::util::GetSecondsSinceEpoch ();
-			path->numTimesUsed = 0;
-		}
 		else
 			path = nullptr;
 		m_SharedRoutingPath = path;
@@ -80,7 +75,7 @@ namespace garlic
 
 	void GarlicRoutingSession::CleanupUnconfirmedLeaseSet (uint64_t ts)
 	{
-		if (m_LeaseSetUpdateMsgID && ts*1000LL > m_LeaseSetSubmissionTime + LEASET_CONFIRMATION_TIMEOUT)
+		if (m_LeaseSetUpdateMsgID && ts*1000LL > m_LeaseSetSubmissionTime + LEASESET_CONFIRMATION_TIMEOUT)
 		{
 			if (GetOwner ())
 				GetOwner ()->RemoveDeliveryStatusSession (m_LeaseSetUpdateMsgID);
@@ -232,7 +227,7 @@ namespace garlic
 		if (GetOwner ())
 		{
 			// resubmit non-confirmed LeaseSet
-			if (GetLeaseSetUpdateStatus () == eLeaseSetSubmitted && ts > GetLeaseSetSubmissionTime () + LEASET_CONFIRMATION_TIMEOUT)
+			if (GetLeaseSetUpdateStatus () == eLeaseSetSubmitted && ts > GetLeaseSetSubmissionTime () + LEASESET_CONFIRMATION_TIMEOUT)
 			{
 				SetLeaseSetUpdateStatus (eLeaseSetUpdated);
 				SetSharedRoutingPath (nullptr); // invalidate path since leaseset was not confirmed
@@ -431,7 +426,8 @@ namespace garlic
 	}
 
 	GarlicDestination::GarlicDestination (): m_NumTags (32), // 32 tags by default
-		m_PayloadBuffer (nullptr), m_NumRatchetInboundTags (0) // 0 means standard
+		m_PayloadBuffer (nullptr), m_LastIncomingSessionTimestamp (0), 
+		m_NumRatchetInboundTags (0) // 0 means standard
 	{
 	}
 
@@ -544,36 +540,17 @@ namespace garlic
 				else if (SupportsEncryptionType (i2p::data::CRYPTO_KEY_TYPE_ECIES_X25519_AEAD))
 				{
 					// otherwise ECIESx25519
-					auto session = std::make_shared<ECIESX25519AEADRatchetSession> (this, false); // incoming
-					if (!session->HandleNextMessage (buf, length, nullptr, 0))
-					{
-						// try to generate more tags for last tagset
-						if (m_LastTagset && (m_LastTagset->GetNextIndex () - m_LastTagset->GetTrimBehind () < 3*ECIESX25519_MAX_NUM_GENERATED_TAGS))
-						{
-							uint64_t missingTag; memcpy (&missingTag, buf, 8);
-							auto maxTags = std::max (m_NumRatchetInboundTags, ECIESX25519_MAX_NUM_GENERATED_TAGS);
-							LogPrint (eLogWarning, "Garlic: Trying to generate more ECIES-X25519-AEAD-Ratchet tags");
-							for (int i = 0; i < maxTags; i++)
-							{
-								auto nextTag = AddECIESx25519SessionNextTag (m_LastTagset);
-								if (!nextTag)
-								{
-									LogPrint (eLogError, "Garlic: Can't create new ECIES-X25519-AEAD-Ratchet tag for last tagset");
-									break;
-								}
-								if (nextTag == missingTag)
-								{
-									LogPrint (eLogDebug, "Garlic: Missing ECIES-X25519-AEAD-Ratchet tag was generated");
-									if (m_LastTagset->HandleNextMessage (buf, length, m_ECIESx25519Tags[nextTag].index))
-										found = true;
-									break;
-								}
-							}
-							if (!found) m_LastTagset = nullptr;
-						}
-						if (!found)
+					auto ts = i2p::util::GetMillisecondsSinceEpoch ();
+					if (ts > m_LastIncomingSessionTimestamp + INCOMING_SESSIONS_MINIMAL_INTERVAL) 
+					{	
+						auto session = std::make_shared<ECIESX25519AEADRatchetSession> (this, false); // incoming
+						if (session->HandleNextMessage (buf, length, nullptr, 0))
+							m_LastIncomingSessionTimestamp = ts;
+						else
 							LogPrint (eLogError, "Garlic: Can't handle ECIES-X25519-AEAD-Ratchet message");
 					}
+					else
+						LogPrint (eLogWarning, "Garlic: Incoming sessions come too ofter");
 				}
 				else
 					LogPrint (eLogError, "Garlic: Failed to decrypt message");
@@ -588,9 +565,7 @@ namespace garlic
 		auto it = m_ECIESx25519Tags.find (tag);
 		if (it != m_ECIESx25519Tags.end ())
 		{
-			if (it->second.tagset->HandleNextMessage (buf, len, it->second.index))
-				m_LastTagset = it->second.tagset;
-			else
+			if (!it->second.tagset || !it->second.tagset->HandleNextMessage (buf, len, it->second.index))
 				LogPrint (eLogError, "Garlic: Can't handle ECIES-X25519-AEAD-Ratchet message");
 			m_ECIESx25519Tags.erase (it);
 			return true;
@@ -709,7 +684,7 @@ namespace garlic
 						else
 							LogPrint (eLogError, "Garlic: Tunnel pool is not set for inbound tunnel");
 						if (tunnel) // we have sent it through an outbound tunnel
-							tunnel->SendTunnelDataMsg (gwHash, gwTunnel, msg);
+							tunnel->SendTunnelDataMsgTo (gwHash, gwTunnel, msg);
 						else
 							LogPrint (eLogWarning, "Garlic: No outbound tunnels available for garlic clove");
 					}
@@ -771,7 +746,8 @@ namespace garlic
 	}
 
 	std::shared_ptr<GarlicRoutingSession> GarlicDestination::GetRoutingSession (
-		std::shared_ptr<const i2p::data::RoutingDestination> destination, bool attachLeaseSet)
+		std::shared_ptr<const i2p::data::RoutingDestination> destination, bool attachLeaseSet,
+	    bool requestNewIfNotFound)
 	{
 		if (destination->GetEncryptionType () == i2p::data::CRYPTO_KEY_TYPE_ECIES_X25519_AEAD &&
 			SupportsEncryptionType (i2p::data::CRYPTO_KEY_TYPE_ECIES_X25519_AEAD))
@@ -786,16 +762,17 @@ namespace garlic
 				if (session->IsInactive (i2p::util::GetSecondsSinceEpoch ()))
 				{
 					LogPrint (eLogDebug, "Garlic: Session restarted");
+					requestNewIfNotFound = true; // it's not a new session
 					session = nullptr;
 				}
 			}
-			if (!session)
+			if (!session && requestNewIfNotFound)
 			{
 				session = std::make_shared<ECIESX25519AEADRatchetSession> (this, true);
 				session->SetRemoteStaticKey (staticKey);
 			}
-			if (destination->IsDestination ())
-				session->SetDestination (destination->GetIdentHash ()); // TODO: remove
+			if (session && destination->IsDestination ())
+				session->SetDestination (destination->GetIdentHash ()); // NS or NSR
 			return session;
 		}
 		else
@@ -887,8 +864,7 @@ namespace garlic
 			}
 			else
 			{
-				auto session = it->second.tagset->GetSession ();
-				if (!session || session->IsTerminated())
+				if (it->second.tagset->IsSessionTerminated ())
 				{
 					it = m_ECIESx25519Tags.erase (it);
 					numExpiredTags++;
@@ -899,8 +875,6 @@ namespace garlic
 		}
 		if (numExpiredTags > 0)
 			LogPrint (eLogDebug, "Garlic: ", numExpiredTags, " ECIESx25519 tags expired for ", GetIdentHash().ToBase64 ());
-		if (m_LastTagset && m_LastTagset->IsExpired (ts))
-			m_LastTagset = nullptr;
 	}
 
 	void GarlicDestination::RemoveDeliveryStatusSession (uint32_t msgID)
@@ -934,7 +908,7 @@ namespace garlic
 		}
 	}
 
-	void GarlicDestination::SetLeaseSetUpdated ()
+	void GarlicDestination::SetLeaseSetUpdated (bool post)
 	{
 		{
 			std::unique_lock<std::mutex> l(m_SessionsMutex);
@@ -1037,9 +1011,7 @@ namespace garlic
 			case eGarlicDeliveryTypeDestination:
 				LogPrint (eLogDebug, "Garlic: Type destination");
 				buf += 32; // TODO: check destination
-#if (__cplusplus >= 201703L) // C++ 17 or higher
 				[[fallthrough]];
-#endif
 				// no break here
 			case eGarlicDeliveryTypeLocal:
 			{
@@ -1075,7 +1047,7 @@ namespace garlic
 				{
 					auto tunnel = GetTunnelPool ()->GetNextOutboundTunnel ();
 					if (tunnel)
-						tunnel->SendTunnelDataMsg (gwHash, gwTunnel, CreateI2NPMessage (typeID, buf, len - offset, msgID));
+						tunnel->SendTunnelDataMsgTo (gwHash, gwTunnel, CreateI2NPMessage (typeID, buf, len - offset, msgID));
 					else
 						LogPrint (eLogWarning, "Garlic: No outbound tunnels available for garlic clove");
 				}

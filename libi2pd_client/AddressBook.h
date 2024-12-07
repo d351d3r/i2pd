@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2013-2022, The PurpleI2P Project
+* Copyright (c) 2013-2024, The PurpleI2P Project
 *
 * This file is part of Purple i2pd project and licensed under BSD3
 *
@@ -11,10 +11,12 @@
 
 #include <string.h>
 #include <string>
+#include <string_view>
 #include <map>
 #include <vector>
 #include <iostream>
 #include <mutex>
+#include <future>
 #include <memory>
 #include <boost/asio.hpp>
 #include "Base.h"
@@ -99,7 +101,8 @@ namespace client
 			std::string ToAddress(std::shared_ptr<const i2p::data::IdentityEx> ident) { return ToAddress(ident->GetIdentHash ()); }
 
 			bool GetEtag (const i2p::data::IdentHash& subscription, std::string& etag, std::string& lastModified);
-
+			bool IsEnabled () const { return m_IsEnabled; }
+			
 		private:
 
 			void StartSubscriptions ();
@@ -123,7 +126,8 @@ namespace client
 			std::mutex m_LookupsMutex;
 			std::map<uint32_t, std::string> m_Lookups; // nonce -> address
 			AddressBookStorage * m_Storage;
-			volatile bool m_IsLoaded, m_IsDownloading;
+			volatile bool m_IsLoaded;
+			std::future<void> m_Downloading;
 			int m_NumRetries;
 			std::vector<std::shared_ptr<AddressBookSubscription> > m_Subscriptions;
 			std::shared_ptr<AddressBookSubscription> m_DefaultSubscription; // in case if we don't know any addresses yet
@@ -135,7 +139,7 @@ namespace client
 	{
 		public:
 
-			AddressBookSubscription (AddressBook& book, const std::string& link);
+			AddressBookSubscription (AddressBook& book, std::string_view link);
 			void CheckUpdates ();
 
 		private:

@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2013-2020, The PurpleI2P Project
+* Copyright (c) 2013-2024, The PurpleI2P Project
 *
 * This file is part of Purple i2pd project and licensed under BSD3
 *
@@ -24,6 +24,8 @@ namespace http
 {
 	const size_t HTTP_CONNECTION_BUFFER_SIZE = 8192;
 	const int TOKEN_EXPIRATION_TIMEOUT = 30; // in seconds
+	const int COMMAND_REDIRECT_TIMEOUT = 5; // in seconds
+	const int TRANSIT_TUNNELS_LIMIT = 1000000;
 
 	class HTTPConnection: public std::enable_shared_from_this<HTTPConnection>
 	{
@@ -81,8 +83,8 @@ namespace http
 
 			bool m_IsRunning;
 			std::unique_ptr<std::thread> m_Thread;
-			boost::asio::io_service m_Service;
-			boost::asio::io_service::work m_Work;
+			boost::asio::io_context m_Service;
+			boost::asio::executor_work_guard<boost::asio::io_context::executor_type> m_Work;
 			boost::asio::ip::tcp::acceptor m_Acceptor;
 			std::string m_Hostname;
 	};

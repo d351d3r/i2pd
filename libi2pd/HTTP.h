@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2013-2021, The PurpleI2P Project
+* Copyright (c) 2013-2024, The PurpleI2P Project
 *
 * This file is part of Purple i2pd project and licensed under BSD3
 *
@@ -14,6 +14,7 @@
 #include <list>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace i2p
@@ -33,17 +34,19 @@ namespace http
 		std::string host;
 		unsigned short int port;
 		std::string path;
+		bool hasquery;
 		std::string query;
 		std::string frag;
+		bool ipv6;
 
-		URL(): schema(""), user(""), pass(""), host(""), port(0), path(""), query(""), frag("") {};
+		URL(): schema(""), user(""), pass(""), host(""), port(0), path(""), hasquery(false), query(""), frag(""), ipv6(false) {};
 
 		/**
 		 * @brief Tries to parse url from string
 		 * @return true on success, false on invalid url
 		 */
 		bool parse (const char *str, std::size_t len = 0);
-		bool parse (const std::string& url);
+		bool parse (std::string_view url);
 
 		/**
 		 * @brief Parse query part of url to key/value map
@@ -67,7 +70,7 @@ namespace http
 	{
 		std::map<std::string, std::string> headers;
 
-		void add_header(const char *name, std::string & value, bool replace = false);
+		void add_header(const char *name, const std::string & value, bool replace = false);
 		void add_header(const char *name, const char *value, bool replace = false);
 		void del_header(const char *name);
 
@@ -90,7 +93,7 @@ namespace http
 		 * @note Positive return value is a size of header
 		 */
 		int parse(const char *buf, size_t len);
-		int parse(const std::string& buf);
+		int parse(std::string_view buf);
 
 		/** @brief Serialize HTTP request to string */
 		std::string to_string();
@@ -101,6 +104,8 @@ namespace http
 		void RemoveHeader (const std::string& name, const std::string& exempt); // remove all headers starting with name, but exempt
 		void RemoveHeader (const std::string& name) { RemoveHeader (name, ""); };
 		std::string GetHeader (const std::string& name) const;
+		size_t GetNumHeaders (const std::string& name) const;
+		size_t GetNumHeaders () const { return headers.size (); };
 	};
 
 	struct HTTPRes : HTTPMsg {
@@ -124,7 +129,7 @@ namespace http
 		 * @note Positive return value is a size of header
 		 */
 		int parse(const char *buf, size_t len);
-		int parse(const std::string& buf);
+		int parse(const std::string_view buf);
 
 		/**
 		 * @brief Serialize HTTP response to string
@@ -157,7 +162,7 @@ namespace http
 	 * @param null If set to true - decode also %00 sequence, otherwise - skip
 	 * @return Decoded string
 	 */
-	std::string UrlDecode(const std::string& data, bool null = false);
+	std::string UrlDecode(std::string_view data, bool null = false);
 
 	/**
 	 * @brief Merge HTTP response content with Transfer-Encoding: chunked

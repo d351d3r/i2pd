@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2013-2022, The PurpleI2P Project
+* Copyright (c) 2013-2024, The PurpleI2P Project
 *
 * This file is part of Purple i2pd project and licensed under BSD3
 *
@@ -14,6 +14,7 @@
 #include <list>
 #include <map>
 #include <array>
+#include <random>
 #include <openssl/bn.h>
 #include <openssl/evp.h>
 #include <boost/asio.hpp>
@@ -28,14 +29,17 @@ namespace transport
 {
 
 	const size_t NTCP2_UNENCRYPTED_FRAME_MAX_SIZE = 65519;
+	const size_t NTCP2_SEND_AFTER_FRAME_SIZE = 16386; // send frame when exceeds this size
 	const size_t NTCP2_SESSION_REQUEST_MAX_SIZE = 287;
 	const size_t NTCP2_SESSION_CREATED_MAX_SIZE = 287;
 	const int NTCP2_MAX_PADDING_RATIO = 6; // in %
 
 	const int NTCP2_CONNECT_TIMEOUT = 5; // 5 seconds
 	const int NTCP2_ESTABLISH_TIMEOUT = 10; // 10 seconds
-	const int NTCP2_TERMINATION_TIMEOUT = 120; // 2 minutes
-	const int NTCP2_TERMINATION_CHECK_TIMEOUT = 30; // 30 seconds
+	const int NTCP2_TERMINATION_TIMEOUT = 115; // 2 minutes - 5 seconds
+	const int NTCP2_TERMINATION_TIMEOUT_VARIANCE = 10; // 10 seconds
+	const int NTCP2_TERMINATION_CHECK_TIMEOUT = 28; // 28 seconds
+	const int NTCP2_TERMINATION_CHECK_TIMEOUT_VARIANCE = 5; // 5 seconds
 	const int NTCP2_RECEIVE_BUFFER_DELETION_TIMEOUT = 3; // 3 seconds
 	const int NTCP2_ROUTERINFO_RESEND_INTERVAL = 25*60; // 25 minuntes in seconds
 	const int NTCP2_ROUTERINFO_RESEND_INTERVAL_THRESHOLD = 25*60; // 25 minuntes
@@ -91,21 +95,21 @@ namespace transport
 		const uint8_t * GetCK () const { return m_CK; };
 		const uint8_t * GetH () const { return m_H; };
 
-		void KDF1Alice ();
-		void KDF1Bob ();
-		void KDF2Alice ();
-		void KDF2Bob ();
-		void KDF3Alice (); // for SessionConfirmed part 2
-		void KDF3Bob ();
+		bool KDF1Alice ();
+		bool KDF1Bob ();
+		bool KDF2Alice ();
+		bool KDF2Bob ();
+		bool KDF3Alice (); // for SessionConfirmed part 2
+		bool KDF3Bob ();
 
-		void KeyDerivationFunction1 (const uint8_t * pub, i2p::crypto::X25519Keys& priv, const uint8_t * rs, const uint8_t * epub); // for SessionRequest, (pub, priv) for DH
-		void KeyDerivationFunction2 (const uint8_t * sessionRequest, size_t sessionRequestLen, const uint8_t * epub); // for SessionCreate
+		bool KeyDerivationFunction1 (const uint8_t * pub, i2p::crypto::X25519Keys& priv, const uint8_t * rs, const uint8_t * epub); // for SessionRequest, (pub, priv) for DH
+		bool KeyDerivationFunction2 (const uint8_t * sessionRequest, size_t sessionRequestLen, const uint8_t * epub); // for SessionCreate
 		void CreateEphemeralKey ();
 
-		void CreateSessionRequestMessage ();
-		void CreateSessionCreatedMessage ();
+		bool CreateSessionRequestMessage (std::mt19937& rng);
+		bool CreateSessionCreatedMessage (std::mt19937& rng);
 		void CreateSessionConfirmedMessagePart1 (const uint8_t * nonce);
-		void CreateSessionConfirmedMessagePart2 (const uint8_t * nonce);
+		bool CreateSessionConfirmedMessagePart2 (const uint8_t * nonce);
 
 		bool ProcessSessionRequestMessage (uint16_t& paddingLen, bool& clockSkew);
 		bool ProcessSessionCreatedMessage (uint16_t& paddingLen);
@@ -134,23 +138,24 @@ namespace transport
 			~NTCP2Session ();
 			void Terminate ();
 			void TerminateByTimeout ();
-			void Done ();
-			void Close () { m_Socket.close (); }; // for accept
+			void Done () override;
+			void Close (); // for accept
 			void DeleteNextReceiveBuffer (uint64_t ts);
 
 			boost::asio::ip::tcp::socket& GetSocket () { return m_Socket; };
 			const boost::asio::ip::tcp::endpoint& GetRemoteEndpoint () { return m_RemoteEndpoint; };
 			void SetRemoteEndpoint (const boost::asio::ip::tcp::endpoint& ep) { m_RemoteEndpoint = ep; };
 
-			bool IsEstablished () const { return m_IsEstablished; };
+			bool IsEstablished () const override { return m_IsEstablished; };
 			bool IsTerminated () const { return m_IsTerminated; };
 
 			void ClientLogin (); // Alice
 			void ServerLogin (); // Bob
 
-			void SendLocalRouterInfo (bool update); // after handshake or by update
-			void SendI2NPMessages (const std::vector<std::shared_ptr<I2NPMessage> >& msgs);
-
+			void SendLocalRouterInfo (bool update) override; // after handshake or by update
+			void SendI2NPMessages (std::list<std::shared_ptr<I2NPMessage> >& msgs) override;
+			void MoveSendQueue (std::shared_ptr<NTCP2Session> other);
+			
 		private:
 
 			void Established ();
@@ -167,13 +172,17 @@ namespace transport
 
 			void HandleSessionRequestSent (const boost::system::error_code& ecode, std::size_t bytes_transferred);
 			void HandleSessionRequestReceived (const boost::system::error_code& ecode, std::size_t bytes_transferred);
+			void ProcessSessionRequest (size_t len);
 			void HandleSessionRequestPaddingReceived (const boost::system::error_code& ecode, std::size_t bytes_transferred);
 			void HandleSessionCreatedSent (const boost::system::error_code& ecode, std::size_t bytes_transferred);
 			void HandleSessionCreatedReceived (const boost::system::error_code& ecode, std::size_t bytes_transferred);
+			void ProcessSessionCreated (size_t len);
 			void HandleSessionCreatedPaddingReceived (const boost::system::error_code& ecode, std::size_t bytes_transferred);
 			void HandleSessionConfirmedSent (const boost::system::error_code& ecode, std::size_t bytes_transferred);
 			void HandleSessionConfirmedReceived (const boost::system::error_code& ecode, std::size_t bytes_transferred);
-
+			void ProcessSessionConfirmed ();
+			void EstablishSessionAfterSessionConfirmed (std::shared_ptr<std::vector<uint8_t> > buf, size_t size);
+			
 			// data
 			void ReceiveLength ();
 			void HandleReceivedLength (const boost::system::error_code& ecode, std::size_t bytes_transferred);
@@ -191,7 +200,7 @@ namespace transport
 			void SendRouterInfo ();
 			void SendTermination (NTCP2TerminationReason reason);
 			void SendTerminationAndTerminate (NTCP2TerminationReason reason);
-			void PostI2NPMessages (std::vector<std::shared_ptr<I2NPMessage> > msgs);
+			void PostI2NPMessages ();
 
 		private:
 
@@ -224,13 +233,28 @@ namespace transport
 			bool m_IsSending, m_IsReceiving;
 			std::list<std::shared_ptr<I2NPMessage> > m_SendQueue;
 			uint64_t m_NextRouterInfoResendTime; // seconds since epoch
-
+			
+			std::list<std::shared_ptr<I2NPMessage> > m_IntermediateQueue; // from transports
+			mutable std::mutex m_IntermediateQueueMutex;
+			
 			uint16_t m_PaddingSizes[16];
 			int m_NextPaddingSize;
 	};
 
 	class NTCP2Server: private i2p::util::RunnableServiceWithWork
 	{
+		private:
+
+			class EstablisherService: public i2p::util::RunnableServiceWithWork
+			{
+				public:
+
+					EstablisherService (): RunnableServiceWithWork ("NTCP2e") {};
+					auto& GetService () { return GetIOService (); };
+					void Start () { StartIOService (); };
+					void Stop () { StopIOService (); };
+			};
+			
 		public:
 
 			enum ProxyType
@@ -239,13 +263,15 @@ namespace transport
 				eSocksProxy,
 				eHTTPProxy
 			};
-
+			
 			NTCP2Server ();
 			~NTCP2Server ();
 
 			void Start ();
 			void Stop ();
-			boost::asio::io_service& GetService () { return GetIOService (); };
+			auto& GetService () { return GetIOService (); };
+			auto& GetEstablisherService () { return m_EstablisherService.GetService (); };
+			std::mt19937& GetRng () { return m_Rng; };
 
 			bool AddNTCP2Session (std::shared_ptr<NTCP2Session> session, bool incoming = false);
 			void RemoveNTCP2Session (std::shared_ptr<NTCP2Session> session);
@@ -266,8 +292,7 @@ namespace transport
 
 			void HandleConnect (const boost::system::error_code& ecode, std::shared_ptr<NTCP2Session> conn, std::shared_ptr<boost::asio::deadline_timer> timer);
 			void HandleProxyConnect(const boost::system::error_code& ecode, std::shared_ptr<NTCP2Session> conn, std::shared_ptr<boost::asio::deadline_timer> timer);
-			void AfterSocksHandshake(std::shared_ptr<NTCP2Session> conn, std::shared_ptr<boost::asio::deadline_timer> timer);
-
+			
 			// timer
 			void ScheduleTermination ();
 			void HandleTerminationTimer (const boost::system::error_code& ecode);
@@ -277,7 +302,7 @@ namespace transport
 			boost::asio::deadline_timer m_TerminationTimer;
 			std::unique_ptr<boost::asio::ip::tcp::acceptor> m_NTCP2Acceptor, m_NTCP2V6Acceptor;
 			std::map<i2p::data::IdentHash, std::shared_ptr<NTCP2Session> > m_NTCP2Sessions;
-			std::list<std::shared_ptr<NTCP2Session> > m_PendingIncomingSessions;
+			std::map<boost::asio::ip::address, std::shared_ptr<NTCP2Session> > m_PendingIncomingSessions;
 
 			ProxyType m_ProxyType;
 			std::string m_ProxyAddress, m_ProxyAuthorization;
@@ -285,7 +310,9 @@ namespace transport
 			boost::asio::ip::tcp::resolver m_Resolver;
 			std::unique_ptr<boost::asio::ip::tcp::endpoint> m_ProxyEndpoint;
 			std::shared_ptr<boost::asio::ip::tcp::endpoint> m_Address4, m_Address6, m_YggdrasilAddress;
-
+			std::mt19937 m_Rng;
+			EstablisherService m_EstablisherService;
+			
 		public:
 
 			// for HTTP/I2PControl

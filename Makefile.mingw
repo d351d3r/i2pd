@@ -4,49 +4,48 @@ USE_WIN32_APP := yes
 WINDRES = windres
 
 CXXFLAGS := $(CXX_DEBUG) -fPIC -msse
-INCFLAGS = -I$(DAEMON_SRC_DIR) -IWin32
-LDFLAGS := ${LD_DEBUG} -static
+INCFLAGS := -I$(DAEMON_SRC_DIR) -IWin32
+LDFLAGS := ${LD_DEBUG} -static -fPIC -msse
 
-NEEDED_CXXFLAGS += -std=c++17 -DWIN32_LEAN_AND_MEAN
-
-# Boost libraries suffix
-BOOST_SUFFIX = -mt
+NEEDED_CXXFLAGS += -std=c++20
+DEFINES += -DWIN32_LEAN_AND_MEAN
 
 # UPNP Support
 ifeq ($(USE_UPNP),yes)
-	CXXFLAGS += -DUSE_UPNP -DMINIUPNP_STATICLIB
+	DEFINES += -DUSE_UPNP -DMINIUPNP_STATICLIB
 	LDLIBS = -lminiupnpc
 endif
 
+ifeq ($(USE_WINXP_FLAGS), yes)
+	DEFINES += -DWINVER=0x0501 -D_WIN32_WINNT=0x0501
+endif
+
 LDLIBS += \
-	-lboost_system$(BOOST_SUFFIX) \
-	-lboost_date_time$(BOOST_SUFFIX) \
-	-lboost_filesystem$(BOOST_SUFFIX) \
-	-lboost_program_options$(BOOST_SUFFIX) \
-	-lssl \
-	-lcrypto \
-	-lz \
+	$(MINGW_PREFIX)/lib/libboost_filesystem-mt.a \
+	$(MINGW_PREFIX)/lib/libboost_program_options-mt.a \
+	$(MINGW_PREFIX)/lib/libssl.a \
+	$(MINGW_PREFIX)/lib/libcrypto.a \
+	$(MINGW_PREFIX)/lib/libz.a \
 	-lwsock32 \
 	-lws2_32 \
-	-lgdi32 \
 	-liphlpapi \
+	-lcrypt32 \
+	-lgdi32 \
 	-lole32 \
 	-luuid \
 	-lpthread
 
 ifeq ($(USE_WIN32_APP), yes)
-	NEEDED_CXXFLAGS += -DWIN32_APP
+	DEFINES += -DWIN32_APP
 	LDFLAGS += -mwindows
 	DAEMON_RC += Win32/Resource.rc
 	DAEMON_OBJS += $(patsubst %.rc,obj/%.o,$(DAEMON_RC))
 endif
 
-ifeq ($(USE_WINXP_FLAGS), yes)
-	NEEDED_CXXFLAGS += -DWINVER=0x0501 -D_WIN32_WINNT=0x0501
-endif
-
 ifeq ($(USE_AESNI),yes)
-	NEEDED_CXXFLAGS += -D__AES__ -maes
+	NEEDED_CXXFLAGS += -maes
+	LDFLAGS += -maes
+	DEFINES += -D__AES__
 endif
 
 ifeq ($(USE_ASLR),yes)
@@ -54,4 +53,4 @@ ifeq ($(USE_ASLR),yes)
 endif
 
 obj/%.o : %.rc | mk_obj_dir
-	$(WINDRES) -i $< -o $@
+	$(WINDRES) $(DEFINES) $(INCFLAGS) --preprocessor-arg=-MMD --preprocessor-arg=-MP --preprocessor-arg=-MF$@.d -i $< -o $@

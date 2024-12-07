@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2013-2022, The PurpleI2P Project
+* Copyright (c) 2013-2024, The PurpleI2P Project
 *
 * This file is part of Purple i2pd project and licensed under BSD3
 *
@@ -8,14 +8,12 @@
 
 #include <stdio.h>
 #include <sstream>
+#include <iomanip>
 #include <openssl/x509.h>
 #include <openssl/pem.h>
 
 // Use global placeholders from boost introduced when local_time.hpp is loaded
 #define BOOST_BIND_GLOBAL_PLACEHOLDERS
-
-#include <boost/date_time/local_time/local_time.hpp>
-#include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/lexical_cast.hpp>
 
@@ -33,7 +31,7 @@ namespace client
 {
 	I2PControlService::I2PControlService (const std::string& address, int port):
 		m_IsRunning (false), m_Thread (nullptr),
-		m_Acceptor (m_Service, boost::asio::ip::tcp::endpoint(boost::asio::ip::address::from_string(address), port)),
+		m_Acceptor (m_Service, boost::asio::ip::tcp::endpoint(boost::asio::ip::make_address(address), port)),
 		m_SSLContext (boost::asio::ssl::context::sslv23),
 		m_ShutdownTimer (m_Service)
 	{
@@ -47,15 +45,29 @@ namespace client
 			i2pcp_crt = i2p::fs::DataDirPath(i2pcp_crt);
 		if (i2pcp_key.at(0) != '/')
 			i2pcp_key = i2p::fs::DataDirPath(i2pcp_key);
-		if (!i2p::fs::Exists (i2pcp_crt) || !i2p::fs::Exists (i2pcp_key)) {
+		if (!i2p::fs::Exists (i2pcp_crt) || !i2p::fs::Exists (i2pcp_key)) 
+		{
 			LogPrint (eLogInfo, "I2PControl: Creating new certificate for control connection");
 			CreateCertificate (i2pcp_crt.c_str(), i2pcp_key.c_str());
-		} else {
+		} 
+		else 
 			LogPrint(eLogDebug, "I2PControl: Using cert from ", i2pcp_crt);
-		}
 		m_SSLContext.set_options (boost::asio::ssl::context::default_workarounds | boost::asio::ssl::context::no_sslv2 | boost::asio::ssl::context::single_dh_use);
-		m_SSLContext.use_certificate_file (i2pcp_crt, boost::asio::ssl::context::pem);
-		m_SSLContext.use_private_key_file (i2pcp_key, boost::asio::ssl::context::pem);
+		boost::system::error_code ec;
+		m_SSLContext.use_certificate_file (i2pcp_crt, boost::asio::ssl::context::pem, ec);
+		if (!ec)		
+			m_SSLContext.use_private_key_file (i2pcp_key, boost::asio::ssl::context::pem, ec);
+		if (ec)
+		{
+			LogPrint (eLogInfo, "I2PControl: Failed to load ceritifcate: ", ec.message (), ". Recreating");
+			CreateCertificate (i2pcp_crt.c_str(), i2pcp_key.c_str());
+			m_SSLContext.use_certificate_file (i2pcp_crt, boost::asio::ssl::context::pem, ec);
+			if (!ec)		
+				m_SSLContext.use_private_key_file (i2pcp_key, boost::asio::ssl::context::pem, ec);
+			if (ec) 
+				// give up
+				LogPrint (eLogError, "I2PControl: Can't load certificates");
+		}	
 
 		// handlers
 		m_MethodHandlers["Authenticate"]       = &I2PControlService::AuthenticateHandler;
@@ -258,9 +270,9 @@ namespace client
 			header << "Content-Length: " << boost::lexical_cast<std::string>(len) << "\r\n";
 			header << "Content-Type: application/json\r\n";
 			header << "Date: ";
-			auto facet = new boost::local_time::local_time_facet ("%a, %d %b %Y %H:%M:%S GMT");
-			header.imbue(std::locale (header.getloc(), facet));
-			header << boost::posix_time::second_clock::local_time() << "\r\n";
+			std::time_t t = std::time (nullptr);
+    		std::tm tm = *std::gmtime (&t);
+			header << std::put_time(&tm, "%a, %d %b %Y %T GMT") << "\r\n";
 			header << "\r\n";
 			offset = header.str ().size ();
 			memcpy (buf->data (), header.str ().c_str (), offset);
@@ -338,10 +350,11 @@ namespace client
 	{
 		for (auto it = params.begin (); it != params.end (); it++)
 		{
-			if (it != params.begin ()) results << ",";
 			LogPrint (eLogDebug, "I2PControl: RouterManager request: ", it->first);
 			auto it1 = m_RouterManagerHandlers.find (it->first);
-			if (it1 != m_RouterManagerHandlers.end ()) {
+			if (it1 != m_RouterManagerHandlers.end ()) 
+			{
+				if (it != params.begin ()) results << ",";
 				(this->*(it1->second))(results);
 			} else
 				LogPrint (eLogError, "I2PControl: RouterManager unknown request: ", it->first);
@@ -404,7 +417,7 @@ namespace client
 			X509_NAME_add_entry_by_txt (name, "O",  MBSTRING_ASC, (unsigned char *)I2P_CONTROL_CERTIFICATE_ORGANIZATION, -1, -1, 0); // organization
 			X509_NAME_add_entry_by_txt (name, "CN", MBSTRING_ASC, (unsigned char *)I2P_CONTROL_CERTIFICATE_COMMON_NAME, -1, -1, 0); // common name
 			X509_set_issuer_name (x509, name); // set issuer to ourselves
-			X509_sign (x509, pkey, EVP_sha1 ()); // sign
+			X509_sign (x509, pkey, EVP_sha1 ()); // sign, last param must be NULL for EdDSA
 
 			// save cert
 			if ((f = fopen (crt_path, "wb")) != NULL) {

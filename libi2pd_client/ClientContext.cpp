@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2013-2022, The PurpleI2P Project
+* Copyright (c) 2013-2024, The PurpleI2P Project
 *
 * This file is part of Purple i2pd project and licensed under BSD3
 *
@@ -16,6 +16,7 @@
 #include "Identity.h"
 #include "util.h"
 #include "ClientContext.h"
+#include "HTTPProxy.h"
 #include "SOCKS.h"
 #include "MatchedDestination.h"
 
@@ -63,18 +64,19 @@ namespace client
 		if (sam)
 		{
 			std::string samAddr; i2p::config::GetOption("sam.address", samAddr);
-			uint16_t    samPort; i2p::config::GetOption("sam.port",    samPort);
+			uint16_t samPortTCP; i2p::config::GetOption("sam.port", samPortTCP);
+			uint16_t samPortUDP; i2p::config::GetOption("sam.portudp", samPortUDP);
 			bool singleThread; i2p::config::GetOption("sam.singlethread", singleThread);
-			LogPrint(eLogInfo, "Clients: Starting SAM bridge at ", samAddr, ":", samPort);
+			LogPrint(eLogInfo, "Clients: Starting SAM bridge at ", samAddr, ":[", samPortTCP, "|", samPortUDP, "]");
 			try
 			{
-				m_SamBridge = new SAMBridge (samAddr, samPort, singleThread);
+				m_SamBridge = new SAMBridge (samAddr, samPortTCP, samPortUDP, singleThread);
 				m_SamBridge->Start ();
 			}
 			catch (std::exception& e)
 			{
-				LogPrint(eLogError, "Clients: Exception in SAM bridge: ", e.what());
-				ThrowFatal ("Unable to start SAM bridge at ", samAddr, ":", samPort, ": ", e.what ());
+				LogPrint(eLogCritical, "Clients: Exception in SAM bridge: ", e.what());
+				ThrowFatal ("Unable to start SAM bridge at ", samAddr, ":[", samPortTCP, "|", samPortUDP,"]: ", e.what ());
 			}
 		}
 
@@ -91,7 +93,7 @@ namespace client
 			}
 			catch (std::exception& e)
 			{
-				LogPrint(eLogError, "Clients: Exception in BOB bridge: ", e.what());
+				LogPrint(eLogCritical, "Clients: Exception in BOB bridge: ", e.what());
 				ThrowFatal ("Unable to start BOB bridge at ", bobAddr, ":", bobPort, ": ", e.what ());
 			}
 		}
@@ -111,7 +113,7 @@ namespace client
 			}
 			catch (std::exception& e)
 			{
-				LogPrint(eLogError, "Clients: Exception in I2CP: ", e.what());
+				LogPrint(eLogCritical, "Clients: Exception in I2CP: ", e.what());
 				ThrowFatal ("Unable to start I2CP at ", i2cpAddr, ":", i2cpPort, ": ", e.what ());
 			}
 		}
@@ -185,22 +187,30 @@ namespace client
 		LogPrint(eLogInfo, "Clients: Stopping AddressBook");
 		m_AddressBook.Stop ();
 
+		LogPrint(eLogInfo, "Clients: Stopping UDP Tunnels");
 		{
 			std::lock_guard<std::mutex> lock(m_ForwardsMutex);
 			m_ServerForwards.clear();
 			m_ClientForwards.clear();
 		}
 
+		LogPrint(eLogInfo, "Clients: Stopping UDP Tunnels timers");
 		if (m_CleanupUDPTimer)
 		{
 			m_CleanupUDPTimer->cancel ();
 			m_CleanupUDPTimer = nullptr;
 		}
 
-		for (auto& it: m_Destinations)
-			it.second->Stop ();
-		m_Destinations.clear ();
+		{
+			LogPrint(eLogInfo, "Clients: Stopping Destinations");
+			std::lock_guard<std::mutex> lock(m_DestinationsMutex);
+			for (auto& it: m_Destinations)
+				it.second->Stop ();
+			LogPrint(eLogInfo, "Clients: Stopping Destinations - Clear");
+			m_Destinations.clear ();
+		}
 
+		LogPrint(eLogInfo, "Clients: Stopping SharedLocalDestination");
 		m_SharedLocalDestination->Release ();
 		m_SharedLocalDestination = nullptr;
 	}
@@ -261,7 +271,7 @@ namespace client
 		static const std::string transient("transient");
 		if (!filename.compare (0, transient.length (), transient)) // starts with transient
 		{
-			keys = i2p::data::PrivateKeys::CreateRandomKeys (sigType, cryptoType);
+			keys = i2p::data::PrivateKeys::CreateRandomKeys (sigType, cryptoType, true);
 			LogPrint (eLogInfo, "Clients: New transient keys address ", m_AddressBook.ToAddress(keys.GetPublic ()->GetIdentHash ()), " created");
 			return true;
 		}
@@ -278,7 +288,7 @@ namespace client
 			s.read ((char *)buf, len);
 			if(!keys.FromBuffer (buf, len))
 			{
-				LogPrint (eLogError, "Clients: Failed to load keyfile ", filename);
+				LogPrint (eLogCritical, "Clients: Failed to load keyfile ", filename);
 				success = false;
 			}
 			else
@@ -287,8 +297,8 @@ namespace client
 		}
 		else
 		{
-			LogPrint (eLogError, "Clients: Can't open file ", fullPath, " Creating new one with signature type ", sigType, " crypto type ", cryptoType);
-			keys = i2p::data::PrivateKeys::CreateRandomKeys (sigType, cryptoType);
+			LogPrint (eLogCritical, "Clients: Can't open file ", fullPath, " Creating new one with signature type ", sigType, " crypto type ", cryptoType);
+			keys = i2p::data::PrivateKeys::CreateRandomKeys (sigType, cryptoType, true);
 			std::ofstream f (fullPath, std::ofstream::binary | std::ofstream::out);
 			size_t len = keys.GetFullLen ();
 			uint8_t * buf = new uint8_t[len];
@@ -328,18 +338,18 @@ namespace client
 		i2p::data::SigningKeyType sigType, i2p::data::CryptoKeyType cryptoType,
 		const std::map<std::string, std::string> * params)
 	{
-		i2p::data::PrivateKeys keys = i2p::data::PrivateKeys::CreateRandomKeys (sigType, cryptoType);
+		i2p::data::PrivateKeys keys = i2p::data::PrivateKeys::CreateRandomKeys (sigType, cryptoType, true);
 		auto localDestination = std::make_shared<RunnableClientDestination> (keys, isPublic, params);
 		AddLocalDestination (localDestination);
 		return localDestination;
 	}
 
 	std::shared_ptr<ClientDestination> ClientContext::CreateNewLocalDestination (
-		boost::asio::io_service& service, bool isPublic,
+		boost::asio::io_context& service, bool isPublic,
 		i2p::data::SigningKeyType sigType, i2p::data::CryptoKeyType cryptoType,
 		const std::map<std::string, std::string> * params)
 	{
-		i2p::data::PrivateKeys keys = i2p::data::PrivateKeys::CreateRandomKeys (sigType, cryptoType);
+		i2p::data::PrivateKeys keys = i2p::data::PrivateKeys::CreateRandomKeys (sigType, cryptoType, true);
 		auto localDestination = std::make_shared<ClientDestination> (service, keys, isPublic, params);
 		AddLocalDestination (localDestination);
 		return localDestination;
@@ -389,7 +399,7 @@ namespace client
 		return localDestination;
 	}
 
-	std::shared_ptr<ClientDestination> ClientContext::CreateNewLocalDestination (boost::asio::io_service& service,
+	std::shared_ptr<ClientDestination> ClientContext::CreateNewLocalDestination (boost::asio::io_context& service,
 		const i2p::data::PrivateKeys& keys, bool isPublic, const std::map<std::string, std::string> * params)
 	{
 		auto it = m_Destinations.find (keys.GetPublic ()->GetIdentHash ());
@@ -411,7 +421,9 @@ namespace client
 			{ I2CP_PARAM_INBOUND_TUNNELS_QUANTITY, "3" },
 			{ I2CP_PARAM_OUTBOUND_TUNNELS_QUANTITY, "3" },
 			{ I2CP_PARAM_LEASESET_TYPE, "3" },
-			{ I2CP_PARAM_LEASESET_ENCRYPTION_TYPE, "0,4" }
+			{ I2CP_PARAM_LEASESET_ENCRYPTION_TYPE, "0,4" },
+			{ I2CP_PARAM_OUTBOUND_NICKNAME, "SharedDest" },
+			{ I2CP_PARAM_STREAMING_PROFILE, "2" }
 		};
 		m_SharedLocalDestination = CreateNewLocalDestination (false, i2p::data::SIGNING_KEY_TYPE_EDDSA_SHA512_ED25519,
 			i2p::data::CRYPTO_KEY_TYPE_ELGAMAL, &params); // non-public, EDDSA
@@ -461,9 +473,13 @@ namespace client
 		options[I2CP_PARAM_MIN_TUNNEL_LATENCY] = GetI2CPOption(section, I2CP_PARAM_MIN_TUNNEL_LATENCY, DEFAULT_MIN_TUNNEL_LATENCY);
 		options[I2CP_PARAM_MAX_TUNNEL_LATENCY] = GetI2CPOption(section, I2CP_PARAM_MAX_TUNNEL_LATENCY, DEFAULT_MAX_TUNNEL_LATENCY);
 		options[I2CP_PARAM_STREAMING_INITIAL_ACK_DELAY] = GetI2CPOption(section, I2CP_PARAM_STREAMING_INITIAL_ACK_DELAY, DEFAULT_INITIAL_ACK_DELAY);
+		options[I2CP_PARAM_STREAMING_MAX_OUTBOUND_SPEED] = GetI2CPOption(section, I2CP_PARAM_STREAMING_MAX_OUTBOUND_SPEED, DEFAULT_MAX_OUTBOUND_SPEED);
+		options[I2CP_PARAM_STREAMING_MAX_INBOUND_SPEED] = GetI2CPOption(section, I2CP_PARAM_STREAMING_MAX_INBOUND_SPEED, DEFAULT_MAX_INBOUND_SPEED);
+		options[I2CP_PARAM_STREAMING_MAX_CONCURRENT_STREAMS] = GetI2CPOption(section, I2CP_PARAM_STREAMING_MAX_CONCURRENT_STREAMS, DEFAULT_MAX_CONCURRENT_STREAMS);
 		options[I2CP_PARAM_STREAMING_ANSWER_PINGS] = GetI2CPOption(section, I2CP_PARAM_STREAMING_ANSWER_PINGS, isServer ? DEFAULT_ANSWER_PINGS : false);
+		options[I2CP_PARAM_STREAMING_PROFILE] = GetI2CPOption(section, I2CP_PARAM_STREAMING_PROFILE, DEFAULT_STREAMING_PROFILE);
 		options[I2CP_PARAM_LEASESET_TYPE] = GetI2CPOption(section, I2CP_PARAM_LEASESET_TYPE, DEFAULT_LEASESET_TYPE);
-		std::string encType = GetI2CPStringOption(section, I2CP_PARAM_LEASESET_ENCRYPTION_TYPE, "0,4");
+		std::string encType = GetI2CPStringOption(section, I2CP_PARAM_LEASESET_ENCRYPTION_TYPE, isServer ? "4" : "0,4");
 		if (encType.length () > 0) options[I2CP_PARAM_LEASESET_ENCRYPTION_TYPE] = encType;
 		std::string privKey = GetI2CPStringOption(section, I2CP_PARAM_LEASESET_PRIV_KEY, "");
 		if (privKey.length () > 0) options[I2CP_PARAM_LEASESET_PRIV_KEY] = privKey;
@@ -507,6 +523,8 @@ namespace client
 			options[I2CP_PARAM_LEASESET_ENCRYPTION_TYPE] = value;
 		if (i2p::config::GetOption(prefix + I2CP_PARAM_LEASESET_PRIV_KEY, value) && !value.empty ())
 			options[I2CP_PARAM_LEASESET_PRIV_KEY] = value;
+		if (i2p::config::GetOption(prefix + I2CP_PARAM_STREAMING_PROFILE, value))
+			options[I2CP_PARAM_STREAMING_PROFILE] = value;
 	}
 
 	void ClientContext::ReadTunnels ()
@@ -568,17 +586,22 @@ namespace client
 					std::string dest;
 					if (type == I2P_TUNNELS_SECTION_TYPE_CLIENT || type == I2P_TUNNELS_SECTION_TYPE_UDPCLIENT)
 						dest = section.second.get<std::string> (I2P_CLIENT_TUNNEL_DESTINATION);
-					int port = section.second.get<int> (I2P_CLIENT_TUNNEL_PORT);
+					uint16_t port = section.second.get<uint16_t> (I2P_CLIENT_TUNNEL_PORT);
 					// optional params
-					bool matchTunnels = section.second.get(I2P_CLIENT_TUNNEL_MATCH_TUNNELS, false);
-					std::string keys = section.second.get (I2P_CLIENT_TUNNEL_KEYS, "transient");
-					std::string address = section.second.get (I2P_CLIENT_TUNNEL_ADDRESS, "127.0.0.1");
-					int destinationPort = section.second.get (I2P_CLIENT_TUNNEL_DESTINATION_PORT, 0);
+					bool matchTunnels = section.second.get (I2P_CLIENT_TUNNEL_MATCH_TUNNELS, false);
+					std::string keys = section.second.get<std::string> (I2P_CLIENT_TUNNEL_KEYS, "transient");
+					std::string address = section.second.get<std::string> (I2P_CLIENT_TUNNEL_ADDRESS, "127.0.0.1");
+					uint16_t destinationPort = section.second.get<uint16_t> (I2P_CLIENT_TUNNEL_DESTINATION_PORT, 0);
 					i2p::data::SigningKeyType sigType = section.second.get (I2P_CLIENT_TUNNEL_SIGNATURE_TYPE, i2p::data::SIGNING_KEY_TYPE_EDDSA_SHA512_ED25519);
 					i2p::data::CryptoKeyType cryptoType = section.second.get (I2P_CLIENT_TUNNEL_CRYPTO_TYPE, i2p::data::CRYPTO_KEY_TYPE_ELGAMAL);
 					// I2CP
 					std::map<std::string, std::string> options;
 					ReadI2CPOptions (section, false, options);
+
+					// Set I2CP name if not set
+					auto itopt = options.find (I2CP_PARAM_OUTBOUND_NICKNAME);
+					if (itopt == options.end ())
+						options[I2CP_PARAM_OUTBOUND_NICKNAME] = name;
 
 					std::shared_ptr<ClientDestination> localDestination = nullptr;
 					if (keys.length () > 0)
@@ -608,7 +631,7 @@ namespace client
 					if (type == I2P_TUNNELS_SECTION_TYPE_UDPCLIENT) {
 						// udp client
 						// TODO: hostnames
-						boost::asio::ip::udp::endpoint end (boost::asio::ip::address::from_string(address), port);
+						boost::asio::ip::udp::endpoint end (boost::asio::ip::make_address(address), port);
 						if (!localDestination)
 							localDestination = m_SharedLocalDestination;
 
@@ -651,7 +674,9 @@ namespace client
 							// http proxy
 							std::string outproxy = section.second.get("outproxy", "");
 							bool addresshelper = section.second.get("addresshelper", true);
-							auto tun = std::make_shared<i2p::proxy::HTTPProxy>(name, address, port, outproxy, addresshelper, localDestination);
+							bool senduseragent = section.second.get("senduseragent", false);
+							auto tun = std::make_shared<i2p::proxy::HTTPProxy>(name, address, port,
+								outproxy, addresshelper, senduseragent, localDestination);
 							clientTunnel = tun;
 							clientEndpoint = tun->GetLocalEndpoint ();
 						}
@@ -711,26 +736,31 @@ namespace client
 				{
 					// mandatory params
 					std::string host = section.second.get<std::string> (I2P_SERVER_TUNNEL_HOST);
-					int port = section.second.get<int> (I2P_SERVER_TUNNEL_PORT);
+					uint16_t port = section.second.get<uint16_t> (I2P_SERVER_TUNNEL_PORT);
 					std::string keys = section.second.get<std::string> (I2P_SERVER_TUNNEL_KEYS);
 					// optional params
-					int inPort = section.second.get (I2P_SERVER_TUNNEL_INPORT, 0);
-					std::string accessList = section.second.get (I2P_SERVER_TUNNEL_ACCESS_LIST, "");
+					uint16_t inPort = section.second.get<uint16_t> (I2P_SERVER_TUNNEL_INPORT, port);
+					std::string accessList = section.second.get<std::string> (I2P_SERVER_TUNNEL_ACCESS_LIST, "");
 					if(accessList == "")
-						accessList=section.second.get (I2P_SERVER_TUNNEL_WHITE_LIST, "");
-					std::string hostOverride = section.second.get (I2P_SERVER_TUNNEL_HOST_OVERRIDE, "");
+						accessList = section.second.get<std::string> (I2P_SERVER_TUNNEL_WHITE_LIST, "");
+					std::string hostOverride = section.second.get<std::string> (I2P_SERVER_TUNNEL_HOST_OVERRIDE, "");
 					std::string webircpass = section.second.get<std::string> (I2P_SERVER_TUNNEL_WEBIRC_PASSWORD, "");
 					bool gzip = section.second.get (I2P_SERVER_TUNNEL_GZIP, false);
 					i2p::data::SigningKeyType sigType = section.second.get (I2P_SERVER_TUNNEL_SIGNATURE_TYPE, i2p::data::SIGNING_KEY_TYPE_EDDSA_SHA512_ED25519);
 					i2p::data::CryptoKeyType cryptoType = section.second.get (I2P_CLIENT_TUNNEL_CRYPTO_TYPE, i2p::data::CRYPTO_KEY_TYPE_ELGAMAL);
 
 					std::string address = section.second.get<std::string> (I2P_SERVER_TUNNEL_ADDRESS, "");
-					bool isUniqueLocal = section.second.get(I2P_SERVER_TUNNEL_ENABLE_UNIQUE_LOCAL, true);
-					bool ssl = section.second.get(I2P_SERVER_TUNNEL_SSL, false);
+					bool isUniqueLocal = section.second.get (I2P_SERVER_TUNNEL_ENABLE_UNIQUE_LOCAL, true);
+					bool ssl = section.second.get (I2P_SERVER_TUNNEL_SSL, false);
 
 					// I2CP
 					std::map<std::string, std::string> options;
 					ReadI2CPOptions (section, true, options);
+
+					// Set I2CP name if not set
+					auto itopt = options.find (I2CP_PARAM_INBOUND_NICKNAME);
+					if (itopt == options.end ())
+						options[I2CP_PARAM_INBOUND_NICKNAME] = name;
 
 					std::shared_ptr<ClientDestination> localDestination = nullptr;
 					auto it = destinations.find (keys);
@@ -757,7 +787,7 @@ namespace client
 					{
 						// udp server tunnel
 						// TODO: hostnames
-						boost::asio::ip::udp::endpoint endpoint(boost::asio::ip::address::from_string(host), port);
+						boost::asio::ip::udp::endpoint endpoint(boost::asio::ip::make_address(host), port);
 						if (address.empty ())
 						{
 							if (!endpoint.address ().is_unspecified () && endpoint.address ().is_v6 ())
@@ -765,8 +795,8 @@ namespace client
 							else
 								address = "127.0.0.1";
 						}
-						auto localAddress = boost::asio::ip::address::from_string(address);
-						auto serverTunnel = std::make_shared<I2PUDPServerTunnel>(name, localDestination, localAddress, endpoint, port, gzip);
+						auto localAddress = boost::asio::ip::make_address(address);
+						auto serverTunnel = std::make_shared<I2PUDPServerTunnel>(name, localDestination, localAddress, endpoint, inPort, gzip);
 						if(!isUniqueLocal)
 						{
 							LogPrint(eLogInfo, "Clients: Disabling loopback address mapping");
@@ -850,7 +880,7 @@ namespace client
 			}
 			catch (std::exception& ex)
 			{
-				LogPrint (eLogError, "Clients: Can't read tunnel ", name, " params: ", ex.what ());
+				LogPrint (eLogCritical, "Clients: Can't read tunnel ", name, " params: ", ex.what ());
 				ThrowFatal ("Unable to start tunnel ", name, ": ", ex.what ());
 			}
 		}
@@ -867,6 +897,7 @@ namespace client
 			uint16_t    httpProxyPort;         i2p::config::GetOption("httpproxy.port",          httpProxyPort);
 			std::string httpOutProxyURL;       i2p::config::GetOption("httpproxy.outproxy",      httpOutProxyURL);
 			bool        httpAddresshelper;     i2p::config::GetOption("httpproxy.addresshelper", httpAddresshelper);
+			bool        httpSendUserAgent;     i2p::config::GetOption("httpproxy.senduseragent", httpSendUserAgent);
 			if (httpAddresshelper)
 				i2p::config::GetOption("addressbook.enabled", httpAddresshelper); // addresshelper is not supported without address book
 			i2p::data::SigningKeyType sigType; i2p::config::GetOption("httpproxy.signaturetype", sigType);
@@ -878,20 +909,22 @@ namespace client
 				{
 					std::map<std::string, std::string> params;
 					ReadI2CPOptionsFromConfig ("httpproxy.", params);
+					params[I2CP_PARAM_OUTBOUND_NICKNAME] = "HTTPProxy";
 					localDestination = CreateNewLocalDestination (keys, false, &params);
 					if (localDestination) localDestination->Acquire ();
 				}
 				else
-					LogPrint(eLogError, "Clients: Failed to load HTTP Proxy key");
+					LogPrint(eLogCritical, "Clients: Failed to load HTTP Proxy key");
 			}
 			try
 			{
-				m_HttpProxy = new i2p::proxy::HTTPProxy("HTTP Proxy", httpProxyAddr, httpProxyPort, httpOutProxyURL, httpAddresshelper, localDestination);
+				m_HttpProxy = new i2p::proxy::HTTPProxy("HTTP Proxy", httpProxyAddr, httpProxyPort,
+					httpOutProxyURL, httpAddresshelper, httpSendUserAgent, localDestination);
 				m_HttpProxy->Start();
 			}
 			catch (std::exception& e)
 			{
-				LogPrint(eLogError, "Clients: Exception in HTTP Proxy: ", e.what());
+				LogPrint(eLogCritical, "Clients: Exception in HTTP Proxy: ", e.what());
 				ThrowFatal ("Unable to start HTTP Proxy at ", httpProxyAddr, ":", httpProxyPort, ": ", e.what ());
 			}
 		}
@@ -925,11 +958,12 @@ namespace client
 				{
 					std::map<std::string, std::string> params;
 					ReadI2CPOptionsFromConfig ("socksproxy.", params);
+					params[I2CP_PARAM_OUTBOUND_NICKNAME] = "SOCKSProxy";
 					localDestination = CreateNewLocalDestination (keys, false, &params);
 					if (localDestination) localDestination->Acquire ();
 				}
 				else
-					LogPrint(eLogError, "Clients: Failed to load SOCKS Proxy key");
+					LogPrint(eLogCritical, "Clients: Failed to load SOCKS Proxy key");
 			}
 			try
 			{
@@ -939,7 +973,7 @@ namespace client
 			}
 			catch (std::exception& e)
 			{
-				LogPrint(eLogError, "Clients: Exception in SOCKS Proxy: ", e.what());
+				LogPrint(eLogCritical, "Clients: Exception in SOCKS Proxy: ", e.what());
 				ThrowFatal ("Unable to start SOCKS Proxy at ", socksProxyAddr, ":", socksProxyPort, ": ", e.what ());
 			}
 		}

@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2013-2021, The PurpleI2P Project
+* Copyright (c) 2013-2024, The PurpleI2P Project
 *
 * This file is part of Purple i2pd project and licensed under BSD3
 *
@@ -13,9 +13,7 @@
 #include <string.h>
 #include <string>
 #include <memory>
-#include <atomic>
 #include <vector>
-#include <mutex>
 #include "Base.h"
 #include "Signature.h"
 #include "CryptoKey.h"
@@ -118,7 +116,6 @@ namespace data
 			SigningKeyType GetSigningKeyType () const;
 			bool IsRSA () const; // signing key type
 			CryptoKeyType GetCryptoKeyType () const;
-			void DropVerifier () const; // to save memory
 
 			bool operator == (const IdentityEx & other) const { return GetIdentHash() == other.GetIdentHash(); }
 			void RecalculateIdentHash(uint8_t * buff=nullptr);
@@ -128,18 +125,18 @@ namespace data
 
 		private:
 
-			void CreateVerifier () const;
-			void UpdateVerifier (i2p::crypto::Verifier * verifier) const;
-
+			void CreateVerifier ();
+			
 		private:
 
 			Identity m_StandardIdentity;
 			IdentHash m_IdentHash;
-			mutable i2p::crypto::Verifier * m_Verifier = nullptr;
-			mutable std::mutex m_VerifierMutex;
+			std::unique_ptr<i2p::crypto::Verifier> m_Verifier;
 			size_t m_ExtendedLen;
 			uint8_t m_ExtendedBuffer[MAX_EXTENDED_BUFFER_SIZE];
 	};
+
+	size_t GetIdentityBufferLen (const uint8_t * buf, size_t len); // return actual identity length in buffer
 
 	class PrivateKeys // for eepsites
 	{
@@ -171,7 +168,7 @@ namespace data
 			std::shared_ptr<i2p::crypto::CryptoKeyDecryptor> CreateDecryptor (const uint8_t * key) const;
 
 			static std::shared_ptr<i2p::crypto::CryptoKeyDecryptor> CreateDecryptor (CryptoKeyType cryptoType, const uint8_t * key);
-			static PrivateKeys CreateRandomKeys (SigningKeyType type = SIGNING_KEY_TYPE_DSA_SHA1, CryptoKeyType cryptoType = CRYPTO_KEY_TYPE_ELGAMAL);
+			static PrivateKeys CreateRandomKeys (SigningKeyType type = SIGNING_KEY_TYPE_DSA_SHA1, CryptoKeyType cryptoType = CRYPTO_KEY_TYPE_ELGAMAL, bool isDestination = false);
 			static void GenerateSigningKeyPair (SigningKeyType type, uint8_t * priv, uint8_t * pub);
 			static void GenerateCryptoKeyPair (CryptoKeyType type, uint8_t * priv, uint8_t * pub); // priv and pub are 256 bytes long
 			static i2p::crypto::Signer * CreateSigner (SigningKeyType keyType, const uint8_t * priv);
@@ -211,7 +208,7 @@ namespace data
 		bool operator< (const XORMetric& other) const { return memcmp (metric, other.metric, 32) < 0; };
 	};
 
-	IdentHash CreateRoutingKey (const IdentHash& ident);
+	IdentHash CreateRoutingKey (const IdentHash& ident, bool nextDay = false);
 	XORMetric operator^(const IdentHash& key1, const IdentHash& key2);
 
 	// destination for delivery instructions

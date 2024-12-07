@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022, The PurpleI2P Project
+* Copyright (c) 2022-2024, The PurpleI2P Project
 *
 * This file is part of Purple i2pd project and licensed under BSD3
 *
@@ -15,6 +15,7 @@
 #include <set>
 #include <list>
 #include <boost/asio.hpp>
+#include "version.h"
 #include "Crypto.h"
 #include "RouterInfo.h"
 #include "RouterContext.h"
@@ -25,7 +26,7 @@ namespace i2p
 namespace transport
 {
 	const int SSU2_CONNECT_TIMEOUT = 5; // 5 seconds
-	const int SSU2_TERMINATION_TIMEOUT = 330; // 5.5 minutes
+	const int SSU2_TERMINATION_TIMEOUT = 165; // in seconds
 	const int SSU2_CLOCK_SKEW = 60; // in seconds
 	const int SSU2_CLOCK_THRESHOLD = 15; // in seconds, if more we should adjust
 	const int SSU2_TOKEN_EXPIRATION_TIMEOUT = 9; // for Retry message, in seconds
@@ -35,18 +36,27 @@ namespace transport
 	const int SSU2_PEER_TEST_EXPIRATION_TIMEOUT = 60; // 60 seconds
 	const size_t SSU2_MAX_PACKET_SIZE = 1500;
 	const size_t SSU2_MIN_PACKET_SIZE = 1280;
-	const int SSU2_HANDSHAKE_RESEND_INTERVAL = 1000; // in millseconds
-	const int SSU2_RESEND_INTERVAL = 300; // in milliseconds
+	const int SSU2_HANDSHAKE_RESEND_INTERVAL = 1000; // in milliseconds
 	const int SSU2_MAX_NUM_RESENDS = 5;
+	const int SSU2_RESEND_ATTEMPT_MIN_INTERVAL = 3; // in milliseconds
 	const int SSU2_INCOMPLETE_MESSAGES_CLEANUP_TIMEOUT = 30; // in seconds
+	const int SSU2_MAX_NUM_RECEIVED_I2NP_MSGIDS = 5000; // how many msgID we store for duplicates check
+	const int SSU2_RECEIVED_I2NP_MSGIDS_CLEANUP_TIMEOUT = 10; // in seconds
+	const int SSU2_DECAY_INTERVAL = 20; // in seconds
 	const size_t SSU2_MIN_WINDOW_SIZE = 16; // in packets
 	const size_t SSU2_MAX_WINDOW_SIZE = 256; // in packets
 	const size_t SSU2_MIN_RTO = 100; // in milliseconds
+	const size_t SSU2_INITIAL_RTO = 540; // in milliseconds
 	const size_t SSU2_MAX_RTO = 2500; // in milliseconds
+	const double SSU2_UNKNOWN_RTT = -1;
+	const double SSU2_RTT_EWMA_ALPHA = 0.125;
 	const float SSU2_kAPPA = 1.8;
-	const size_t SSU2_MAX_OUTGOING_QUEUE_SIZE = 500; // in messages
+	const int SSU2_MAX_NUM_ACNT = 255; // acnt, acks or nacks
+	const int SSU2_MAX_NUM_ACK_PACKETS = 511; // ackthrough + acnt + 1 range
 	const int SSU2_MAX_NUM_ACK_RANGES = 32; // to send
 	const uint8_t SSU2_MAX_NUM_FRAGMENTS = 64;
+	const int SSU2_SEND_DATETIME_NUM_PACKETS = 256;
+	const int SSU2_MIN_RELAY_RESPONSE_RESEND_VERSION = MAKE_VERSION_NUMBER(0, 9, 64); // 0.9.64
 
 	// flags
 	const uint8_t SSU2_FLAG_IMMEDIATE_ACK_REQUESTED = 0x01;
@@ -100,11 +110,12 @@ namespace transport
 		eSSU2SessionStateSessionConfirmedSent,
 		eSSU2SessionStateEstablished,
 		eSSU2SessionStateClosing,
+		eSSU2SessionStateClosingConfirmed,
 		eSSU2SessionStateTerminated,
 		eSSU2SessionStateFailed,
 		eSSU2SessionStateIntroduced,
+		eSSU2SessionStateHolePunch,
 		eSSU2SessionStatePeerTest,
-		eSSU2SessionStatePeerTestReceived, // 5 before 4
 		eSSU2SessionStateTokenRequestReceived
 	};
 
@@ -167,15 +178,19 @@ namespace transport
 		{
 			uint8_t buf[SSU2_MAX_PACKET_SIZE];
 			size_t len;
+			int fragmentNum;
 			bool isLast;
+			std::shared_ptr<Fragment> next;
 		};
 
 		std::shared_ptr<I2NPMessage> msg;
 		int nextFragmentNum;
 		uint32_t lastFragmentInsertTime; // in seconds
-		std::map<int, std::shared_ptr<Fragment> > outOfSequenceFragments;
+		std::shared_ptr<Fragment> outOfSequenceFragments; // #1 and more
 
 		void AttachNextFragment (const uint8_t * fragment, size_t fragmentSize);
+		bool ConcatOutOfSequenceFragments (); // true if message complete
+		void AddOutOfSequenceFragment (std::shared_ptr<Fragment> fragment);
 	};
 
 	struct SSU2SentPacket
@@ -193,45 +208,50 @@ namespace transport
 	class SSU2Server;
 	class SSU2Session: public TransportSession, public std::enable_shared_from_this<SSU2Session>
 	{
-		union Header
-		{
-			uint64_t ll[2];
-			uint8_t buf[16];
-			struct
+		protected:
+			
+			union Header
 			{
-				uint64_t connID;
-				uint32_t packetNum;
-				uint8_t type;
-				uint8_t flags[3];
-			} h;
-		};
+				uint64_t ll[2];
+				uint8_t buf[16];
+				struct
+				{
+					uint64_t connID;
+					uint32_t packetNum;
+					uint8_t type;
+					uint8_t flags[3];
+				} h;
+			};
 
-		struct HandshakePacket
-		{
-			Header header;
-			uint8_t headerX[48]; // part1 for SessionConfirmed
-			uint8_t payload[SSU2_MAX_PACKET_SIZE*2];
-			size_t payloadSize = 0;
-			uint64_t sendTime = 0; // in milliseconds
-			bool isSecondFragment = false; // for SessionConfirmed
-		};
+		private:
+			
+			struct HandshakePacket
+			{
+				Header header;
+				uint8_t headerX[48]; // part1 for SessionConfirmed
+				uint8_t payload[SSU2_MAX_PACKET_SIZE*2];
+				size_t payloadSize = 0;
+				uint64_t sendTime = 0; // in milliseconds
+				bool isSecondFragment = false; // for SessionConfirmed
+			};
 
-		typedef std::function<void ()> OnEstablished;
+			typedef std::function<void ()> OnEstablished;
 
 		public:
 
 			SSU2Session (SSU2Server& server, std::shared_ptr<const i2p::data::RouterInfo> in_RemoteRouter = nullptr,
-				std::shared_ptr<const i2p::data::RouterInfo::Address> addr = nullptr);
-			~SSU2Session ();
+				std::shared_ptr<const i2p::data::RouterInfo::Address> addr = nullptr, bool noise = true);
+			virtual ~SSU2Session ();
 
 			void SetRemoteEndpoint (const boost::asio::ip::udp::endpoint& ep) { m_RemoteEndpoint = ep; };
 			const boost::asio::ip::udp::endpoint& GetRemoteEndpoint () const { return m_RemoteEndpoint; };
 			i2p::data::RouterInfo::CompatibleTransports GetRemoteTransports () const { return m_RemoteTransports; };
+			i2p::data::RouterInfo::CompatibleTransports GetRemotePeerTestTransports () const { return m_RemotePeerTestTransports; };
 			std::shared_ptr<const i2p::data::RouterInfo::Address> GetAddress () const { return m_Address; };
 			void SetOnEstablished (OnEstablished e) { m_OnEstablished = e; };
 			OnEstablished GetOnEstablished () const { return m_OnEstablished; };
 
-			void Connect ();
+			virtual void Connect ();
 			bool Introduce (std::shared_ptr<SSU2Session> session, uint32_t relayTag);
 			void WaitForIntroduction ();
 			void SendPeerTest (); // Alice, Data message
@@ -241,29 +261,53 @@ namespace transport
 			void FlushData ();
 			void Done () override;
 			void SendLocalRouterInfo (bool update) override;
-			void SendI2NPMessages (const std::vector<std::shared_ptr<I2NPMessage> >& msgs) override;
+			void SendI2NPMessages (std::list<std::shared_ptr<I2NPMessage> >& msgs) override;
+			void MoveSendQueue (std::shared_ptr<SSU2Session> other);
 			uint32_t GetRelayTag () const override { return m_RelayTag; };
-			size_t Resend (uint64_t ts); // return number or resent packets
-			bool IsEstablished () const { return m_State == eSSU2SessionStateEstablished; };
+			size_t Resend (uint64_t ts); // return number of resent packets
+			uint64_t GetLastResendTime () const { return m_LastResendTime; };
+			bool IsEstablished () const override { return m_State == eSSU2SessionStateEstablished; };
 			uint64_t GetConnID () const { return m_SourceConnID; };
 			SSU2SessionState GetState () const { return m_State; };
 			void SetState (SSU2SessionState state) { m_State = state; };
 
-			bool ProcessFirstIncomingMessage (uint64_t connID, uint8_t * buf, size_t len);
+			virtual bool ProcessFirstIncomingMessage (uint64_t connID, uint8_t * buf, size_t len);
 			bool ProcessSessionCreated (uint8_t * buf, size_t len);
 			bool ProcessSessionConfirmed (uint8_t * buf, size_t len);
 			bool ProcessRetry (uint8_t * buf, size_t len);
 			bool ProcessHolePunch (uint8_t * buf, size_t len);
-			bool ProcessPeerTest (uint8_t * buf, size_t len);
+			virtual bool ProcessPeerTest (uint8_t * buf, size_t len);
 			void ProcessData (uint8_t * buf, size_t len, const boost::asio::ip::udp::endpoint& from);
 
+		protected:
+
+			SSU2Server& GetServer () { return m_Server; }
+			RouterStatus GetRouterStatus () const;
+			void SetRouterStatus (RouterStatus status) const;
+			size_t GetMaxPayloadSize () const { return m_MaxPayloadSize; }
+			void SetIsDataReceived (bool dataReceived) { m_IsDataReceived = dataReceived; };
+			
+			uint64_t GetSourceConnID () const { return m_SourceConnID; }
+			void SetSourceConnID (uint64_t sourceConnID) { m_SourceConnID = sourceConnID; }
+			uint64_t GetDestConnID () const { return m_DestConnID; }
+			void SetDestConnID (uint64_t destConnID) { m_DestConnID = destConnID; }
+
+			void SetAddress (std::shared_ptr<const i2p::data::RouterInfo::Address> addr) { m_Address = addr; }
+			void HandlePayload (const uint8_t * buf, size_t len);
+
+			size_t CreateAddressBlock (uint8_t * buf, size_t len, const boost::asio::ip::udp::endpoint& ep);
+			size_t CreatePaddingBlock (uint8_t * buf, size_t len, size_t minSize = 0);
+			size_t CreatePeerTestBlock (uint8_t * buf, size_t len, uint8_t msg, SSU2PeerTestCode code, const uint8_t * routerHash, const uint8_t * signedData, size_t signedDataLen);
+
+			bool ExtractEndpoint (const uint8_t * buf, size_t size, boost::asio::ip::udp::endpoint& ep);
+			
 		private:
 
 			void Terminate ();
 			void Established ();
 			void ScheduleConnectTimer ();
 			void HandleConnectTimer (const boost::system::error_code& ecode);
-			void PostI2NPMessages (std::vector<std::shared_ptr<I2NPMessage> > msgs);
+			void PostI2NPMessages ();
 			bool SendQueue (); // returns true if ack block was sent
 			bool SendFragmentedMessage (std::shared_ptr<I2NPMessage> msg);
 			void ResendHandshakePacket ();
@@ -281,46 +325,41 @@ namespace transport
 			uint32_t SendData (const uint8_t * buf, size_t len, uint8_t flags = 0); // returns packet num
 			void SendQuickAck ();
 			void SendTermination ();
-			void SendHolePunch (uint32_t nonce, const boost::asio::ip::udp::endpoint& ep, const uint8_t * introKey, uint64_t token);
-			void SendPeerTest (uint8_t msg, const uint8_t * signedData, size_t signedDataLen, const uint8_t * introKey); // PeerTest message
 			void SendPathResponse (const uint8_t * data, size_t len);
 			void SendPathChallenge ();
 
-			void HandlePayload (const uint8_t * buf, size_t len);
 			void HandleDateTime (const uint8_t * buf, size_t len);
+			void HandleRouterInfo (const uint8_t * buf, size_t len);
 			void HandleAck (const uint8_t * buf, size_t len);
 			void HandleAckRange (uint32_t firstPacketNum, uint32_t lastPacketNum, uint64_t ts);
-			void HandleAddress (const uint8_t * buf, size_t len);
-			bool ExtractEndpoint (const uint8_t * buf, size_t size, boost::asio::ip::udp::endpoint& ep);
+			virtual void HandleAddress (const uint8_t * buf, size_t len);
 			size_t CreateEndpoint (uint8_t * buf, size_t len, const boost::asio::ip::udp::endpoint& ep);
 			std::shared_ptr<const i2p::data::RouterInfo::Address> FindLocalAddress () const;
 			void AdjustMaxPayloadSize ();
-			RouterStatus GetRouterStatus () const;
-			void SetRouterStatus (RouterStatus status) const;
+			bool GetTestingState () const;
+			void SetTestingState(bool testing) const;
 			std::shared_ptr<const i2p::data::RouterInfo> ExtractRouterInfo (const uint8_t * buf, size_t size);
-			void CreateNonce (uint64_t seqn, uint8_t * nonce);
 			bool UpdateReceivePacketNum (uint32_t packetNum); // for Ack, returns false if duplicate
 			void HandleFirstFragment (const uint8_t * buf, size_t len);
 			void HandleFollowOnFragment (const uint8_t * buf, size_t len);
-			bool ConcatOutOfSequenceFragments (std::shared_ptr<SSU2IncompleteMessage> m); // true if message complete
 			void HandleRelayRequest (const uint8_t * buf, size_t len);
-			void HandleRelayIntro (const uint8_t * buf, size_t len);
+			void HandleRelayIntro (const uint8_t * buf, size_t len, int attempts = 0);
 			void HandleRelayResponse (const uint8_t * buf, size_t len);
-			void HandlePeerTest (const uint8_t * buf, size_t len);
+			virtual void HandlePeerTest (const uint8_t * buf, size_t len);
+			void HandleI2NPMsg (std::shared_ptr<I2NPMessage>&& msg);
 
-			size_t CreateAddressBlock (uint8_t * buf, size_t len, const boost::asio::ip::udp::endpoint& ep);
 			size_t CreateRouterInfoBlock (uint8_t * buf, size_t len, std::shared_ptr<const i2p::data::RouterInfo> r);
+			size_t CreateRouterInfoBlock (uint8_t * buf, size_t len, std::shared_ptr<const i2p::data::RouterInfo::Buffer> riBuffer);
 			size_t CreateAckBlock (uint8_t * buf, size_t len);
-			size_t CreatePaddingBlock (uint8_t * buf, size_t len, size_t minSize = 0);
 			size_t CreateI2NPBlock (uint8_t * buf, size_t len, std::shared_ptr<I2NPMessage>&& msg);
 			size_t CreateFirstFragmentBlock (uint8_t * buf, size_t len, std::shared_ptr<I2NPMessage> msg);
 			size_t CreateFollowOnFragmentBlock (uint8_t * buf, size_t len, std::shared_ptr<I2NPMessage> msg, uint8_t& fragmentNum, uint32_t msgID);
 			size_t CreateRelayIntroBlock (uint8_t * buf, size_t len, const uint8_t * introData, size_t introDataLen);
 			size_t CreateRelayResponseBlock (uint8_t * buf, size_t len, SSU2RelayResponseCode code, uint32_t nonce, uint64_t token, bool v4);
-			size_t CreatePeerTestBlock (uint8_t * buf, size_t len, uint8_t msg, SSU2PeerTestCode code, const uint8_t * routerHash, const uint8_t * signedData, size_t signedDataLen);
+
 			size_t CreatePeerTestBlock (uint8_t * buf, size_t len, uint32_t nonce); // Alice
 			size_t CreateTerminationBlock (uint8_t * buf, size_t len);
-
+			
 		private:
 
 			SSU2Server& m_Server;
@@ -330,33 +369,46 @@ namespace transport
 			std::unique_ptr<HandshakePacket> m_SentHandshakePacket; // SessionRequest, SessionCreated or SessionConfirmed
 			std::shared_ptr<const i2p::data::RouterInfo::Address> m_Address;
 			boost::asio::ip::udp::endpoint m_RemoteEndpoint;
-			i2p::data::RouterInfo::CompatibleTransports m_RemoteTransports; // for peer tests
+			i2p::data::RouterInfo::CompatibleTransports m_RemoteTransports, m_RemotePeerTestTransports; 
+			int m_RemoteVersion;
 			uint64_t m_DestConnID, m_SourceConnID;
 			SSU2SessionState m_State;
 			uint8_t m_KeyDataSend[64], m_KeyDataReceive[64];
-			uint32_t m_SendPacketNum, m_ReceivePacketNum;
+			uint32_t m_SendPacketNum, m_ReceivePacketNum, m_LastDatetimeSentPacketNum;
 			std::set<uint32_t> m_OutOfSequencePackets; // packet nums > receive packet num
 			std::map<uint32_t, std::shared_ptr<SSU2SentPacket> > m_SentPackets; // packetNum -> packet
-			std::map<uint32_t, std::shared_ptr<SSU2IncompleteMessage> > m_IncompleteMessages; // I2NP
-			std::map<uint32_t, std::pair <std::shared_ptr<SSU2Session>, uint64_t > > m_RelaySessions; // nonce->(Alice, timestamp) for Bob or nonce->(Charlie, timestamp) for Alice
-			std::map<uint32_t, std::pair <std::shared_ptr<SSU2Session>, uint64_t > > m_PeerTests; // same as for relay sessions
+			std::unordered_map<uint32_t, std::shared_ptr<SSU2IncompleteMessage> > m_IncompleteMessages; // msgID -> I2NP
+			std::unordered_map<uint32_t, std::pair <std::shared_ptr<SSU2Session>, uint64_t > > m_RelaySessions; // nonce->(Alice, timestamp) for Bob or nonce->(Charlie, timestamp) for Alice
 			std::list<std::shared_ptr<I2NPMessage> > m_SendQueue;
 			i2p::I2NPMessagesHandler m_Handler;
+			std::list<std::shared_ptr<I2NPMessage> > m_IntermediateQueue; // from transports
+			mutable std::mutex m_IntermediateQueueMutex;
 			bool m_IsDataReceived;
-			size_t m_WindowSize, m_RTT, m_RTO;
+			double m_RTT;
+			int m_MsgLocalExpirationTimeout;
+			int m_MsgLocalSemiExpirationTimeout;
+			size_t m_WindowSize, m_RTO;
 			uint32_t m_RelayTag; // between Bob and Charlie
 			OnEstablished m_OnEstablished; // callback from Established
 			boost::asio::deadline_timer m_ConnectTimer;
 			SSU2TerminationReason m_TerminationReason;
 			size_t m_MaxPayloadSize;
 			std::unique_ptr<i2p::data::IdentHash> m_PathChallenge;
+			std::unordered_map<uint32_t, uint32_t> m_ReceivedI2NPMsgIDs; // msgID -> timestamp in seconds
+			uint64_t m_LastResendTime, m_LastResendAttemptTime; // in milliseconds
 	};
-
+	
 	inline uint64_t CreateHeaderMask (const uint8_t * kh, const uint8_t * nonce)
 	{
 		uint64_t data = 0;
 		i2p::crypto::ChaCha20 ((uint8_t *)&data, 8, kh, nonce, (uint8_t *)&data);
 		return data;
+	}
+
+	inline void CreateNonce (uint64_t seqn, uint8_t * nonce)
+	{
+		memset (nonce, 0, 4);
+		htole64buf (nonce + 4, seqn);
 	}
 }
 }

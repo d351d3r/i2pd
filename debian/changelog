@@ -1,3 +1,111 @@
+i2pd (2.54.0-1) unstable; urgency=medium
+
+  * updated to version 2.54.0/0.9.64
+
+ -- orignal <orignal@i2pmail.org>  Sun, 6 Oct 2024 16:00:00 +0000
+
+i2pd (2.53.1-1) unstable; urgency=medium
+
+  * updated to version 2.53.1
+
+ -- orignal <orignal@i2pmail.org>  Tue, 30 Jul 2024 16:00:00 +0000
+
+i2pd (2.53.0-1) unstable; urgency=medium
+
+  * updated to version 2.53.0/0.9.63
+  * binary moved from /usr/sbin to /usr/bin
+
+ -- r4sas <r4sas@i2pmail.org>  Sat, 20 Jul 2024 15:10:00 +0000
+
+i2pd (2.52.0-1) unstable; urgency=medium
+
+  * updated to version 2.52.0
+
+ -- orignal <orignal@i2pmail.org>  Sun, 12 May 2024 16:00:00 +0000
+
+i2pd (2.51.0-1) unstable; urgency=medium
+
+  * updated to version 2.51.0/0.9.62
+
+ -- orignal <orignal@i2pmail.org>  Sat, 06 Apr 2024 16:00:00 +0000
+
+i2pd (2.50.2-1) unstable; urgency=medium
+
+  * updated to version 2.50.2/0.9.61
+
+ -- orignal <orignal@i2pmail.org>  Sat, 06 Jan 2024 16:00:00 +0000
+
+i2pd (2.50.1-1) unstable; urgency=medium
+
+  * updated to version 2.50.1/0.9.61
+
+ -- r4sas <r4sas@i2pmail.org>  Sat, 23 Dec 2023 18:30:00 +0000
+
+i2pd (2.50.0-1) unstable; urgency=medium
+
+  * updated to version 2.50.0/0.9.61
+
+ -- orignal <orignal@i2pmail.org>  Mon, 18 Dec 2023 16:00:00 +0000
+
+i2pd (2.49.0-1) unstable; urgency=medium
+
+  * updated to version 2.49.0/0.9.60
+
+ -- orignal <orignal@i2pmail.org>  Mon, 18 Sep 2023 16:00:00 +0000
+
+i2pd (2.48.0-1) unstable; urgency=high
+
+  * updated to version 2.48.0/0.9.59
+
+ -- orignal <orignal@i2pmail.org>  Mon, 12 Jun 2023 16:00:00 +0000
+
+i2pd (2.47.0-1) unstable; urgency=high
+
+  * updated to version 2.47.0/0.9.58
+
+ -- orignal <orignal@i2pmail.org>  Sat, 11 Mar 2023 16:00:00 +0000
+
+i2pd (2.46.1-2) unstable; urgency=critical
+
+  * re-pushed release due to new critical bug
+
+ -- r4sas <r4sas@i2pmail.org>  Mon, 20 Feb 2023 23:40:00 +0000
+
+i2pd (2.46.1-1) unstable; urgency=high
+
+  * updated to version 2.46.1/0.9.57
+
+ -- r4sas <r4sas@i2pmail.org>  Mon, 20 Feb 2023 02:45:00 +0000
+
+i2pd (2.46.0-1) unstable; urgency=high
+
+  * updated to version 2.46.0/0.9.57
+
+ -- orignal <orignal@i2pmail.org>  Wed, 15 Feb 2023 19:00:00 +0000
+
+i2pd (2.45.1-1) unstable; urgency=medium
+
+  * updated to version 2.45.1/0.9.57
+
+ -- orignal <orignal@i2pmail.org>  Wed, 11 Jan 2023 19:00:00 +0000
+
+i2pd (2.45.0-1) unstable; urgency=high
+
+  * updated to version 2.45.0/0.9.57
+  * compat level 12
+  * standards version 4.3.0
+  * increased nofile limit in service and init.d to 8192
+  * added conffiles
+  * removed #1210 patch
+
+ -- r4sas <r4sas@i2pmail.org>  Tue, 3 Jan 2023 18:00:00 +0000
+
+i2pd (2.44.0-1) unstable; urgency=medium
+
+  * updated to version 2.44.0/0.9.56
+
+ -- orignal <orignal@i2pmail.org>  Sun, 20 Nov 2022 19:00:00 +0000
+
 i2pd (2.43.0-1) unstable; urgency=medium
 
   * updated to version 2.43.0/0.9.55

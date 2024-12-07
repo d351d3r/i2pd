@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2013-2022, The PurpleI2P Project
+* Copyright (c) 2013-2024, The PurpleI2P Project
 *
 * This file is part of Purple i2pd project and licensed under BSD3
 *
@@ -37,14 +37,7 @@ namespace data
 
 	void LeaseSet::Update (const uint8_t * buf, size_t len, bool verifySignature)
 	{
-		if (len > m_BufferLen)
-		{
-			auto oldBuffer = m_Buffer;
-			m_Buffer = new uint8_t[len];
-			delete[] oldBuffer;
-		}
-		memcpy (m_Buffer, buf, len);
-		m_BufferLen = len;
+		SetBuffer (buf, len);
 		ReadFromBuffer (false, verifySignature);
 	}
 
@@ -57,7 +50,7 @@ namespace data
 	void LeaseSet::ReadFromBuffer (bool readIdentity, bool verifySignature)
 	{
 		if (readIdentity || !m_Identity)
-			m_Identity = std::make_shared<IdentityEx>(m_Buffer, m_BufferLen);
+			m_Identity = netdb.NewIdentity (m_Buffer, m_BufferLen);
 		size_t size = m_Identity->GetFullLen ();
 		if (size + 256 > m_BufferLen)
 		{
@@ -83,7 +76,7 @@ namespace data
 		LogPrint (eLogDebug, "LeaseSet: Read num=", (int)num);
 		if (!num || num > MAX_NUM_LEASES)
 		{
-			LogPrint (eLogError, "LeaseSet: Rncorrect number of leases", (int)num);
+			LogPrint (eLogError, "LeaseSet: Incorrect number of leases", (int)num);
 			m_IsValid = false;
 			return;
 		}
@@ -264,8 +257,18 @@ namespace data
 
 	void LeaseSet::SetBuffer (const uint8_t * buf, size_t len)
 	{
-		if (m_Buffer) delete[] m_Buffer;
-		m_Buffer = new uint8_t[len];
+		if (len > MAX_LS_BUFFER_SIZE)
+		{
+			LogPrint (eLogError, "LeaseSet: Buffer is too long ", len);
+			len = MAX_LS_BUFFER_SIZE;
+		}
+		if (m_Buffer && len > m_BufferLen)
+		{
+			delete[] m_Buffer;
+			m_Buffer = nullptr;
+		}
+		if (!m_Buffer)
+			m_Buffer = new uint8_t[len];
 		m_BufferLen = len;
 		memcpy (m_Buffer, buf, len);
 	}
@@ -312,9 +315,9 @@ namespace data
 	{
 		// standard LS2 header
 		std::shared_ptr<const IdentityEx> identity;
-		if (readIdentity)
+		if (readIdentity || !GetIdentity ())
 		{
-			identity = std::make_shared<IdentityEx>(buf, len);
+			identity = netdb.NewIdentity (buf, len);
 			SetIdentity (identity);
 		}
 		else
@@ -363,6 +366,8 @@ namespace data
 				VerifySignature (identity, buf, len, offset);
 			SetIsValid (verified);
 		}
+		else
+			SetIsValid (true);
 		offset += m_TransientVerifier ? m_TransientVerifier->GetSignatureLen () : identity->GetSignatureLen ();
 		if (offset > len) {
 			LogPrint (eLogWarning, "LeaseSet2: short buffer: wanted ", int(offset), "bytes, have ", int(len));
@@ -420,6 +425,16 @@ namespace data
 		if (offset + 1 > len) return 0;
 		int numLeases = buf[offset]; offset++;
 		auto ts = i2p::util::GetMillisecondsSinceEpoch ();
+		if (GetExpirationTime () > ts + LEASESET_EXPIRATION_TIME_THRESHOLD)
+		{
+			LogPrint (eLogWarning, "LeaseSet2: Expiration time is from future ", GetExpirationTime ()/1000LL);
+			return 0;
+		}	
+		if (ts > m_PublishedTimestamp*1000LL + LEASESET_EXPIRATION_TIME_THRESHOLD)
+		{
+			LogPrint (eLogWarning, "LeaseSet2: Published time is too old ", m_PublishedTimestamp);
+			return 0;
+		}	
 		if (IsStoreLeases ())
 		{
 			UpdateLeasesBegin ();
@@ -430,6 +445,11 @@ namespace data
 				lease.tunnelGateway = buf + offset; offset += 32; // gateway
 				lease.tunnelID = bufbe32toh (buf + offset); offset += 4; // tunnel ID
 				lease.endDate = bufbe32toh (buf + offset)*1000LL; offset += 4; // end date
+				if (lease.endDate > ts + LEASESET_EXPIRATION_TIME_THRESHOLD)
+				{
+					LogPrint (eLogWarning, "LeaseSet2: Lease end date is from future ", lease.endDate);
+					return 0;
+				}	
 				UpdateLease (lease, ts);
 			}
 			UpdateLeasesEnd ();
@@ -723,25 +743,41 @@ namespace data
 		memset (m_Buffer + offset, 0, signingKeyLen);
 		offset += signingKeyLen;
 		// num leases
+		auto numLeasesPos = offset;	
 		m_Buffer[offset] = num;
 		offset++;
 		// leases
 		m_Leases = m_Buffer + offset;
 		auto currentTime = i2p::util::GetMillisecondsSinceEpoch ();
+		int skipped = 0;
 		for (int i = 0; i < num; i++)
 		{
+			uint64_t ts = tunnels[i]->GetCreationTime () + i2p::tunnel::TUNNEL_EXPIRATION_TIMEOUT - i2p::tunnel::TUNNEL_EXPIRATION_THRESHOLD; // 1 minute before expiration
+			ts *= 1000; // in milliseconds
+			if (ts <= currentTime)
+			{
+				// already expired, skip
+				skipped++;
+				continue;
+			}	
+			if (ts > m_ExpirationTime) m_ExpirationTime = ts;
+			// make sure leaseset is newer than previous, but adding some time to expiration date
+			ts += (currentTime - tunnels[i]->GetCreationTime ()*1000LL)*2/i2p::tunnel::TUNNEL_EXPIRATION_TIMEOUT; // up to 2 secs
 			memcpy (m_Buffer + offset, tunnels[i]->GetNextIdentHash (), 32);
 			offset += 32; // gateway id
 			htobe32buf (m_Buffer + offset, tunnels[i]->GetNextTunnelID ());
 			offset += 4; // tunnel id
-			uint64_t ts = tunnels[i]->GetCreationTime () + i2p::tunnel::TUNNEL_EXPIRATION_TIMEOUT - i2p::tunnel::TUNNEL_EXPIRATION_THRESHOLD; // 1 minute before expiration
-			ts *= 1000; // in milliseconds
-			if (ts > m_ExpirationTime) m_ExpirationTime = ts;
-			// make sure leaseset is newer than previous, but adding some time to expiration date
-			ts += (currentTime - tunnels[i]->GetCreationTime ()*1000LL)*2/i2p::tunnel::TUNNEL_EXPIRATION_TIMEOUT; // up to 2 secs
 			htobe64buf (m_Buffer + offset, ts);
 			offset += 8; // end date
 		}
+		if (skipped > 0)
+		{
+			// adjust num leases
+			if (skipped > num) skipped = num;
+			num -= skipped;
+			m_BufferLen -= skipped*LEASE_SIZE;
+			m_Buffer[numLeasesPos] = num;
+		}	
 		// we don't sign it yet. must be signed later on
 	}
 
@@ -803,7 +839,7 @@ namespace data
 
 	LocalLeaseSet2::LocalLeaseSet2 (uint8_t storeType, const i2p::data::PrivateKeys& keys,
 		const KeySections& encryptionKeys, const std::vector<std::shared_ptr<i2p::tunnel::InboundTunnel> >& tunnels,
-		bool isPublic, bool isPublishedEncrypted):
+		bool isPublic, uint64_t publishedTimestamp, bool isPublishedEncrypted):
 		LocalLeaseSet (keys.GetPublic (), nullptr, 0)
 	{
 		auto identity = keys.GetPublic ();
@@ -832,8 +868,7 @@ namespace data
 		m_Buffer[0] = storeType;
 		// LS2 header
 		auto offset = identity->ToBuffer (m_Buffer + 1, m_BufferLen) + 1;
-		auto timestamp = i2p::util::GetSecondsSinceEpoch ();
-		htobe32buf (m_Buffer + offset, timestamp); offset += 4; // published timestamp (seconds)
+		htobe32buf (m_Buffer + offset, publishedTimestamp); offset += 4; // published timestamp (seconds)
 		uint8_t * expiresBuf = m_Buffer + offset; offset += 2; // expires, fill later
 		htobe16buf (m_Buffer + offset, flags); offset += 2; // flags
 		if (keys.IsOfflineSignature ())
@@ -854,29 +889,44 @@ namespace data
 		}
 		// leases
 		uint32_t expirationTime = 0; // in seconds
+		int skipped = 0; auto numLeasesPos = offset;
 		m_Buffer[offset] = num; offset++; // num leases
 		for (int i = 0; i < num; i++)
 		{
+			auto ts = tunnels[i]->GetCreationTime () + i2p::tunnel::TUNNEL_EXPIRATION_TIMEOUT - i2p::tunnel::TUNNEL_EXPIRATION_THRESHOLD; // in seconds, 1 minute before expiration
+			if (ts <= publishedTimestamp) 
+			{	
+				// already expired, skip
+				skipped++;
+				continue; 
+			}	
+			if (ts > expirationTime) expirationTime = ts;
 			memcpy (m_Buffer + offset, tunnels[i]->GetNextIdentHash (), 32);
 			offset += 32; // gateway id
 			htobe32buf (m_Buffer + offset, tunnels[i]->GetNextTunnelID ());
 			offset += 4; // tunnel id
-			auto ts = tunnels[i]->GetCreationTime () + i2p::tunnel::TUNNEL_EXPIRATION_TIMEOUT - i2p::tunnel::TUNNEL_EXPIRATION_THRESHOLD; // in seconds, 1 minute before expiration
-			if (ts > expirationTime) expirationTime = ts;
 			htobe32buf (m_Buffer + offset, ts);
 			offset += 4; // end date
 		}
+		if (skipped > 0)
+		{
+			// adjust num leases
+			if (skipped > num) skipped = num;
+			num -= skipped;
+			m_BufferLen -= skipped*LEASE2_SIZE;
+			m_Buffer[numLeasesPos] = num;
+		}	
 		// update expiration
 		if (expirationTime)
 		{
 			SetExpirationTime (expirationTime*1000LL);
-			auto expires = (int)expirationTime - timestamp;
+			auto expires = (int)expirationTime - publishedTimestamp;
 			htobe16buf (expiresBuf, expires > 0 ? expires : 0);
 		}
 		else
 		{
 			// no tunnels or withdraw
-			SetExpirationTime (timestamp*1000LL);
+			SetExpirationTime (publishedTimestamp*1000LL);
 			memset (expiresBuf, 0, 2); // expires immeditely
 		}
 		// sign

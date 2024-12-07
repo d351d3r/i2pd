@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2013-2022, The PurpleI2P Project
+* Copyright (c) 2013-2024, The PurpleI2P Project
 *
 * This file is part of Purple i2pd project and licensed under BSD3
 *
@@ -45,6 +45,7 @@ namespace i2p
 namespace win32
 {
 	DWORD g_GracefulShutdownEndtime = 0;
+	bool g_isWinService;
 
 	static void ShowPopupMenu (HWND hWnd, POINT *curpos, int wDefaultItem)
 	{
@@ -144,30 +145,37 @@ namespace win32
 		s << bytes << " Bytes\n";
 	}
 
-	static void ShowNetworkStatus (std::stringstream& s, RouterStatus status)
+	static void ShowNetworkStatus (std::stringstream& s, RouterStatus status, bool testing, RouterError error)
 	{
 		switch (status)
 		{
 			case eRouterStatusOK: s << "OK"; break;
-			case eRouterStatusTesting: s << "Test"; break;
 			case eRouterStatusFirewalled: s << "FW"; break;
 			case eRouterStatusUnknown: s << "Unk"; break;
 			case eRouterStatusProxy: s << "Proxy"; break;
 			case eRouterStatusMesh: s << "Mesh"; break;
 			default: s << "Unk";
 		};
-		if (i2p::context.GetError () != eRouterErrorNone)
+		if (testing)
+			s << " (Test)";
+		if (error != eRouterErrorNone)
 		{
-			switch (i2p::context.GetError ())
+			switch (error)
 			{
 				case eRouterErrorClockSkew:
-					s << " - Clock skew";
+					s << " - " << tr("Clock skew");
 				break;
 				case eRouterErrorOffline:
-					s << " - Offline";
+					s << " - " << tr("Offline");
 				break;
 				case eRouterErrorSymmetricNAT:
-					s << " - Symmetric NAT";
+					s << " - " << tr("Symmetric NAT");
+				break;
+				case eRouterErrorFullConeNAT:
+					s << " - " << tr("Full cone NAT");
+				break;
+				case eRouterErrorNoDescriptors:
+					s << " - " << tr("No Descriptors");
 				break;
 				default: ;
 			}
@@ -178,11 +186,11 @@ namespace win32
 	{
 		s << "\n";
 		s << "Status: ";
-		ShowNetworkStatus (s, i2p::context.GetStatus ());
+		ShowNetworkStatus (s, i2p::context.GetStatus (), i2p::context.GetTesting(), i2p::context.GetError ());
 		if (i2p::context.SupportsV6 ())
 		{
 			s << " / ";
-			ShowNetworkStatus (s, i2p::context.GetStatusV6 ());
+			ShowNetworkStatus (s, i2p::context.GetStatusV6 (), i2p::context.GetTestingV6(), i2p::context.GetErrorV6 ());
 		}
 		s << "; ";
 		s << "Success Rate: " << i2p::tunnel::tunnels.GetTunnelCreationSuccessRate() << "%\n";
@@ -305,7 +313,7 @@ namespace win32
 					}
 					case ID_DATADIR:
 					{
-						std::string datadir(i2p::fs::GetUTF8DataDir());
+						std::string datadir(i2p::fs::GetDataDir());
 						ShellExecute(NULL, "explore", datadir.c_str(), NULL, NULL, SW_SHOWNORMAL);
 						return 0;
 					}
@@ -347,6 +355,7 @@ namespace win32
 						}
 					}
 				}
+				[[fallthrough]];
 			}
 			case WM_TRAYICON:
 			{
@@ -416,8 +425,9 @@ namespace win32
 		return DefWindowProc( hWnd, uMsg, wParam, lParam);
 	}
 
-	bool StartWin32App ()
+	bool StartWin32App (bool isWinService)
 	{
+		g_isWinService = isWinService;
 		if (FindWindow (I2PD_WIN32_CLASSNAME, TEXT("i2pd")))
 		{
 			MessageBox(NULL, TEXT("I2Pd is running already"), TEXT("Warning"), MB_OK);
@@ -446,7 +456,9 @@ namespace win32
 			MessageBox(NULL, "Failed to create main window", TEXT("Warning!"), MB_ICONERROR | MB_OK | MB_TOPMOST);
 			return false;
 		}
-		SubscribeToEvents();
+		// COM requires message loop to work, which is not implemented in service mode
+		if (!g_isWinService)
+			SubscribeToEvents();
 		return true;
 	}
 
@@ -466,7 +478,8 @@ namespace win32
 		HWND hWnd = FindWindow (I2PD_WIN32_CLASSNAME, TEXT("i2pd"));
 		if (hWnd)
 			PostMessage (hWnd, WM_COMMAND, MAKEWPARAM(ID_EXIT, 0), 0);
-		// UnSubscribeFromEvents(); // TODO: understand why unsubscribing crashes app
+		else if(!g_isWinService)
+			UnSubscribeFromEvents();
 		UnregisterClass (I2PD_WIN32_CLASSNAME, GetModuleHandle(NULL));
 	}
 

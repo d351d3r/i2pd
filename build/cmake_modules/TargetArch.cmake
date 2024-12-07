@@ -1,4 +1,4 @@
-# Copyright (c) 2017-2022, The PurpleI2P Project
+# Copyright (c) 2017-2023, The PurpleI2P Project
 # This file is part of Purple i2pd project and licensed under BSD3
 # See full license text in LICENSE file at top of project tree
 
@@ -18,7 +18,7 @@ set(archdetect_c_code "
         || defined(_M_ARM64) \\
         || (defined(__TARGET_ARCH_ARM) && __TARGET_ARCH_ARM-0 >= 8)
         #error cmake_ARCH arm64
-    #if defined(__ARM_ARCH_7__) \\
+    #elif defined(__ARM_ARCH_7__) \\
         || defined(__ARM_ARCH_7A__) \\
         || defined(__ARM_ARCH_7R__) \\
         || defined(__ARM_ARCH_7M__) \\
@@ -61,7 +61,7 @@ set(archdetect_c_code "
     #else
         #error cmake_ARCH mips
     #endif
-#elif defined(__ppc__) || defined(__ppc) || defined(__powerpc__) \\
+#elif defined(__ppc__) || defined(__ppc) || defined(__powerpc__) || defined(__POWERPC__) \\
       || defined(_ARCH_COM) || defined(_ARCH_PWR) || defined(_ARCH_PPC)  \\
       || defined(_M_MPPC) || defined(_M_PPC)
     #if defined(__ppc64__) || defined(__powerpc64__) || defined(__64BIT__)
@@ -83,13 +83,13 @@ function(target_architecture output_var)
         # First let's normalize the order of the values
 
         # Note that it's not possible to compile PowerPC applications if you are using
-        # the OS X SDK version 10.6 or later - you'll need 10.4/10.5 for that, so we
-        # disable it by default
+        # the OS X SDK version 10.7 or later - you'll need 10.4/10.5/10.6 for that, so we
+        # disable it by default. Also, ppc64 is not supported in 10.6.
         # See this page for more information:
         # http://stackoverflow.com/questions/5333490/how-can-we-restore-ppc-ppc64-as-well-as-full-10-4-10-5-sdk-support-to-xcode-4
 
         # Architecture defaults to i386 or ppc on OS X 10.5 and earlier, depending on the CPU type detected at runtime.
-        # On OS X 10.6+ the default is x86_64 if the CPU supports it, i386 otherwise.
+        # On OS X 10.6+ the default is x86_64 if the CPU supports it, i386 otherwise; 10.6 also supports ppc.
 
         foreach(osx_arch ${CMAKE_OSX_ARCHITECTURES})
             if("${osx_arch}" STREQUAL "ppc" AND ppc_support)
@@ -133,11 +133,11 @@ function(target_architecture output_var)
         enable_language(C)
 
         # Detect the architecture in a rather creative way...
-        # This compiles a small C program which is a series of ifdefs that selects a
-        # particular #error preprocessor directive whose message string contains the
-        # target architecture. The program will always fail to compile (both because
-        # file is not a valid C program, and obviously because of the presence of the
-        # #error preprocessor directives... but by exploiting the preprocessor in this
+        # This compiles a small C program which is a series of ifdefs that selects
+        # a particular #error preprocessor directive whose message string contains
+        # the target architecture. The program will always fail to compile (both because
+        # file is not a valid C program, and obviously because of the presence of
+        # the #error preprocessor directives... but by exploiting the preprocessor in this
         # way, we can detect the correct target architecture even when cross-compiling,
         # since the program itself never needs to be run (only the compiler/preprocessor)
         try_run(

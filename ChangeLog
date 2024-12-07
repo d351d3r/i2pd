@@ -1,6 +1,371 @@
 # for this file format description,
 # see https://github.com/olivierlacan/keep-a-changelog
 
+## [2.54.0] - 2024-10-06
+### Added
+- Maintain recently connected routers list to avoid false-positive peer test
+- Limited connectivity mode(through proxy)
+- "i2p.streaming.profile" tunnel's param to let tunnel select also low-bandwidth routers
+- Limit stream's inbound speed
+- Periodic ack requests in ratchets session
+- Set congestion cap G immediately if through proxy
+- Show tunnel's routers bandwidth caps in web console
+- Handle immediate ack requested flag in SSU2 data packets
+- Resend and ack peer test and relay messages
+- "senduseragent" HTTP proxy's param to pass through user's User-Agent
+### Changed
+- Exclude 'N' routers from high-bandwidth routers for client tunnels
+- C++11 support has been dropped, the minimal requirement is C++17 now, C++20 for some compilers
+- Removed dependency from boost::date_time and boost::filesystem
+- Set default i2cp.leaseSetEncType to 0,4 and to 4 for server tunnels
+- Handle i2cp.inboundlimit and i2cp.outboundlimit params in I2CP
+- Publish LeaseSet with new timestamp update if tunnel was replaced in the same second
+- Increase max number of generated tags to 800 per tagset
+- Routing path expiration by time instead num attempts 
+- Save timestamp from epoch instead local time to profiles
+- Update introducer's iTag if session to introducer was replaced to new one
+- RTT, window size and number of NACKs calculation for streaming
+- Don't select same peer for tunnel too often
+- Use WinApi for data path UTF-8 conversion for Windows 
+### Fixed
+- Jump link crash if address book is disabled
+- Race condition if connect through an introducer
+- "Date" header in I2PControl response
+- Incomplete response from web console
+- AEAD verification with LibreSSL
+- Number of generated tags and new keys for follow-on tagsets
+- Expired leases in LeaseSet
+- Attempts to send HolePunch to 0.0.0.0
+- Incorrect options size in quick ack streaming packet
+- Low bandwidth router appeared as first peer in high-bandwidth client tunnel
+
+## [2.53.1] - 2024-07-29
+### Changed
+- I2CP performance improvement
+### Fixed
+- 100% CPU usage after I2CP/SAM/BOB session termination
+- Incorrect client limits returned through I2CP
+- Build with LibreSSL
+
+## [2.53.0] - 2024-07-19
+### Added
+- New congestion control algorithm for streaming
+- Support miniupnp-2.2.8
+- Limit stream's outbound speed
+- Flood to next day closest floodfills before UTC midnight
+- Recognize duplicated routers and bypass them
+- Random SSU2 resend interval
+### Changed
+- Set minimal version to 0.9.69 for floodfills and 0.9.58 for client tunnels
+- Removed openssl 1.0.2 support
+- Move unsent I2NP messages to the new session if replaced
+- Use mt19937 RNG instead rand()
+- Update router's congestion caps before initial publishing
+- Don't try introducer with invalid address
+- Select newest introducers to publish
+- Don't request relay tag for every session if we have enough introducers
+- Update timestamp for non-reachable or hidden router
+- Reset streaming routing path if duplicated SYN received
+- Update LeaseSet if inbound tunnel failed
+- Reseeds list
+### Fixed
+- Crash when a destination gets terminated
+- Expired offline signature upon destination creation
+- Race condition between local RouterInfo buffer creation and sending it through the transports
+
+## [2.52.0] - 2024-05-12
+### Added
+- Separate threads for persisting RouterInfos and profiles to disk
+- Give preference to address with direct connection
+- Exclude addresses with incorrect static or intro key
+- Avoid two firewalled routers in the row in tunnel
+- Drop unsolicited database search replies
+### Changed
+- Increase number of hashes to 16 in exploratory lookup reply
+- Reduce number of a RouterInfo lookup attempts to 5
+- Reset stream RTO if outbound tunnel was changed
+- Insert previously excluded floodfill back when successfully connected
+- Increase maximum stream resend attempts to 9
+- Reply to exploratory lookups with only confirmed routers if low tunnel build rate
+- Don't accept too old RouterInfo
+- Build client tunnels through confirmed routers only if low tunnel build rate
+- Manage netDb requests more frequently
+- Don't reply with closer than us only floodfills for lookup
+### Fixed
+- Crash on router lookup if exploratory pool is not ready
+- Race condition in excluded peers for next lookup
+- Excessive number of lookups for same destination
+- Race condition with transport peers during shutdown
+- Corrupted RouterInfo files
+
+## [2.51.0] - 2024-04-06
+### Added
+- Non-blocking mode for UDP sockets
+- Set SSU2 socket buffer size based on bandwidth limit
+- Encrypted tunnel tests
+- Support for multiple UDP server tunnels on one destination
+- Publish medium congestion indication
+- Local domain sockets for SOCKS proxy upstream
+- Tunnel status "declined" in web console
+- SAM error reply "Incompatible crypto" if remote destination has incompatible crypto
+- Reduce amount of traffic by handling local message drops
+- Keep SSU2 socket open even if it fails to bind
+- Lower SSU2 resend traffic spikes
+- Expiration for messages in SSU2 send queue
+- Use EWMA for stream RTT estimation
+- Request choking delay if too many NACKs in stream
+- Allow 0ms latency for tunnel
+- Randomize tunnels selection for tests
+### Changed
+- Upstream SOCKS proxy from SOCKS4 to SOCKS5
+- Transit tunnels limit to 4 bytes. Default value to 10K
+- Reply CANT_REACH_PEER if connect to ourselves in SAM
+- Don't send already expired I2NP messages
+- Use monotonic timer to measure tunnel test latency
+- Standard NTCP2 frame doesn't exceed 16K
+- Always send request through tunnels in case of restricted routes
+- Don't delete connected routers from NetDb
+- Send lookup reply directly to reply tunnel gateway if possible
+- Reduce unreachable router ban interval to 8 minutes
+- Don't request banned routers / don't try to connect to unreachable router
+- Consider 'M' routers as low bandwidth
+- Limit minimal received SSU2 packet size to 40 bytes
+- Bob picks peer test session only if Charlie's address supports peer testing
+- Reject peer test msg 2 if peer testing is not supported
+- Don't request termination if SSU2 session was not established
+- Set maximum SSU2 queue size depending on RTT value
+- New streaming RTT calculation algorithm
+- Don't double initial RTO for streams when changing tunnels
+- Restore failed tunnel if test or data for inbound tunnel received
+- Don't fail last remaining tunnel in pool
+- Publish LeasetSet again if local destination was not ready or no tunnels
+- Make more attempts to pick high bandwidth hop for client tunnel
+- Reduced SSU2 session termination timeout to 165 seconds
+- Reseeds list
+### Fixed
+- ECIESx25519 symmetric key tagset early expiration
+- Encrypted LeaseSet lookup
+- Outbound tunnel build fails if it's endpoint is the same as reply tunnel gateway
+- I2PControl RouterManager returns invalid JSON when unknown params are passed
+- Mix of data between different UDP sessions on the same server
+- TARGET_OS_SIMULATOR check
+- Handling of "reservedrange" param
+- New NTCP2 session gets teminated upon termination of old one
+- New SSU2 session gets teminated upon termination of old one
+- Peer test to non-supporting router
+- Streaming ackThrough off 1 if number of NACKs exceeds 255
+- Race condition in ECIESx25519 tags table
+- Good tunnel becomes failed
+- Crash when packet comes to terminated stream
+- Stream hangs during LeaseSet update
+
+## [2.50.2] - 2024-01-06
+###Fixed
+- Crash with OpenSSL 3.2.0
+- False positive clock skew detection
+
+## [2.50.1] - 2023-12-23
+###Fixed
+- Support for new EdDSA usage behavior in OpenSSL 3.2.0
+
+## [2.50.0] - 2023-12-18
+### Added
+- Support of concurrent ACCEPTs on SAM 3.1
+- Haiku OS support
+- Low bandwidth and far routers can expire before 1 hour
+### Changed
+- Don't pick too active peer for first hop
+- Try peer test again if status is Unknown
+- Send peer tests with random delay
+- Reseeds list
+### Fixed
+- XSS vulnerability in addresshelper
+- Publishing NAT64 ipv6 addresses
+- Deadlock in AsyncSend callback
+
+## [2.49.0] - 2023-09-18
+### Added
+- Handle SOCK5 authorization with empty user/password
+- Drop incoming transport sessions from too old or from future routers
+- Memory pool for router profiles
+- Allow 0 hops in explicitPeers
+### Changed
+- Separate network and testing status
+- Remove AVX code
+- Improve NTCP2 transport session logging
+- Select router with ipv4 for tunnel endpoint
+- Consider all addresses non-published for U and H routers even if they have host/port
+- Don't pick completely unreachable routers for tunnels
+- Exclude SSU1 introducers from SSU2 addresses
+- Don't create paired inbound tunnel if length is different
+- Remove introducer from RouterInfo after 60 minutes
+- Reduce SSU2 keep alive interval and add keep alive interval variance
+- Don't pick too old sessions for introducer
+### Fixed
+- Version of the subnegotiation in user/password SOCKS5 response
+- Send keepalive for existing session with introducer
+- Buffer offset for EVP_EncryptFinal_ex() to include outlen
+- Termination block size processing for transport sessions
+- Crash if deleted BOB destination was shared between few BOB sessions
+- Introducers with zero tag
+- Padding for SSU2 path response
+
+## [2.48.0] - 2023-06-12
+### Added
+- Allow user/password authentication method for SOCK5 proxy
+- Publish reject all congestion cap 'G' if transit is not accepted
+- 'critical' log level
+- Print b32 on webconsole destination page
+- Webconsole button to drop a remote LeaseSet
+- limits.zombies param - minimum percentage of successfully created tunnels for routers cleanup
+- Recognize real routers if successfully connected or responded to tunnel build request
+### Changed
+- Bypass slow transport sessions for first hop selection
+- Limit AESNI inline asm to x86/x64
+- Create smaller I2NP packets if possible
+- Make router unreachable if AEAD tag verification fails in SessionCreated
+- Don't include a router to floodfills list until it's confirmed as real
+- Drop LeaseSet store request if not floodfill
+- Bypass medium congestion('D') routers for client tunnels
+- Publish encrypted RouterInfo through tunnels
+- Check if s is valid x25519 public key
+- Check if socket is open before sending data in SSU2
+### Fixed
+- Webconsole empty page if destination is not found
+- i2p.streaming.answerPings param
+- Reload tunnels
+- Address caps for unspecified ipv6 address
+- Incomplete HTTP headers in I2P tunnels
+- SSU2 socket network exceptions on Windows
+- Use of 'server' type tunnel port as inport (#1936)
+
+## [2.47.0] - 2023-03-11
+### Added
+- Congestion caps
+- SAM UDP port parameter
+- Support domain addresses for yggdrasil reseeds
+### Changed
+- DHT for floodfills instead plain list
+- Process router's messages in separate thread
+- Don't publish non-reachable router
+- Send and check target destination in first streaming SYN packet
+- Reseeds list
+### Fixed
+- Memory leak in windows network state detection
+- Reseed attempts from invalid address
+
+## [2.46.1] - 2023-02-20
+### Fixed
+- Race condition while getting router's peer profile
+- Creation of new router.info
+- Displaying LeaseSets in the webconsole
+- Crash when processing ACK request
+
+## [2.46.0] - 2023-02-15
+### Added
+- Limit number of acked SSU2 packets to 511
+- Localization to Swedish, Portuguese, Turkish, Polish
+- Periodically send Datetime block in NTCP2 and SSU2
+- Don't select random port from reserved
+- In memory table for peer profiles
+- Store if router was unreachable in it's peer profile
+- Show IPv6 addresses in square brackets in webconsole
+- Check referer when processing Addresshelper
+### Changed
+- Algorithm for tunnel creation success rate calculation
+- Drop incoming NTCP2 and SSU2 connection if published IP doesn't match actual endpoint
+- Exclude actually unreachable router from netdb for 2 hours
+- Select first hop from high bandwidth peers for client tunnels
+- Drop too long or too short LeaseSet
+- Delete router from netdb if became invalid after update
+- Terminate existing session if clock skew detected
+- Close previous UDP socket if open before reopening
+- Minimal version for floodfill is 0.9.51
+- Sort transports by endpoints in webconsole
+### Fixed
+- Deadlock during processing I2NP block with Garlic in ECIES encrypted message to router
+- Race condition with encrypted LeaseSets
+- HTTP query detection
+- Connection attempts to IPs from invalid ranges
+- Publish "0.0.0.0" in RouterInfo
+- Crash upon receiving PeerTest 7
+- Tunnels for closed SAM session socket
+- Missing NTCP2 address in RouterInfo if enabled back
+
+## [2.45.1] - 2023-01-11
+### Added
+- Full Cone NAT status error
+### Changed
+- Drop duplicated I2NP messages in SSU2
+- Set rejection code 30 if tunnel with id already exists
+- Network status is always OK if peer test msg 5 received
+### Fixed
+- UPnP crash if SSU2 or NTCP2 is disabled
+- Crash on termination for some platforms
+
+## [2.45.0] - 2023-01-03
+### Added
+- Test for Symmetric NAT with peer test msgs 6 and 7
+- Webconsole "No Descriptors" router error state
+- 1 and 15 seconds bandwidth calculation for i2pcontrol
+- Show non-zero send queue size for transports in web console
+- Compressible padding for I2P addresses
+- Localization to Czech
+- Don't accept incoming session from invalid/reserved addresses for NTCP2 and SSU2
+- Limit simultaneous tunnel build requests by 4 per pool
+### Changed
+- Removed SSU support
+- Reduced bandwidth calculation interval from 60 to 15 seconds
+- Increased default max transit tunnels number from 2500 to 5000 or 10000 for floodfill
+- Transit tunnels limit is doubled if floodfill mode is enabled
+- NTCP2 and SSU2 timestamps are rounded to seconds
+- Drop RouterInfos and LeaseSets with timestamp from future
+- Don't delete unreachable routers if tunnel creation success rate is too low
+- Refuse duplicated incoming pending NTCP2 session from same IP
+- Don't send SSU2 termination again if termination received block received
+- Handle standard network error for SSU2 without throwing an exception
+- Don't select overloaded peer for next tunnel
+- Remove "X-Requested-With" in HTTP Proxy for non-AJAX requests
+### Fixed
+- File descriptors leak
+- Random crash on AddressBook update
+- Crash if incorrect LeaseSet size
+- Spamming to log if no descriptors
+- ::1 address in RouterInfo
+- SSU2 network error handling (especially for Windows)
+- Race condition with pending outgoing SSU2 sessions
+- RTT self-reduction for long-live streams
+
+## [2.44.0] - 2022-11-20
+### Added
+- SSL connection for server I2P tunnels
+- Localization to Italian and Spanish
+- SSU2 through SOCKS5 UDP proxy
+- Reload tunnels through web console
+- SSU2 send immediate ack request flag
+- SSU2 send and verify path challenge
+- Configurable ssu2.mtu4 and ssu2.mtu6
+### Changed
+- SSU2 is enabled and SSU is disabled by default
+- Separate network status and error
+- Random selection between NTCP2 and SSU2 priority
+- Added notbob.i2p to jump services
+- Remove DoNotTrack flag from HTTP Request header
+- Skip addresshelper page if destination was not changed
+- SSU2 allow different ports from RelayReponse and HolePunch
+- SSU2 resend PeerTest msg 1 and msg 2
+- SSU2 Send Retry instead SessionCreated if clock skew detected
+### Fixed
+- Long HTTP headers for HTTP proxy and HTTP server tunnel
+- SSU2 resends and resend limits
+- Crash at startup if addressbook is disabled
+- NTCP2 ipv6 connection through SOCKS5 proxy
+- SSU2 SessionRequest with zero token
+- SSU2 MTU less than 1280
+- SSU2 port=1
+- Incorrect addresses from network interfaces
+- Definitions for Darwin PPC; do not use pthread_setname_np
+
 ## [2.43.0] - 2022-08-22
 ### Added
 - Complete SSU2 implementation
@@ -411,7 +776,7 @@
 ### Added
 - Client auth flag for b33 address
 ### Changed
-- Remove incoming  NTCP2 session from pending list when established
+- Remove incoming NTCP2 session from pending list when established
 - Handle errors for NTCP2 SessionConfrimed send
 ### Fixed
 - Failure to start on Windows XP
@@ -715,7 +1080,7 @@
 ### Added
 - Datagram i2p tunnels
 - Unique local addresses for server tunnels
-- Configurable list of reseed servers  and initial addressbook
+- Configurable list of reseed servers and initial addressbook
 - Configurable netid
 - Initial iOS support
 

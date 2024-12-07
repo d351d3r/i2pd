@@ -69,12 +69,12 @@ Build instructions:
 
 **Supported systems:**
 
-* GNU/Linux - [![Build on Ubuntu](https://github.com/PurpleI2P/i2pd/actions/workflows/build.yml/badge.svg)](https://github.com/PurpleI2P/i2pd/actions/workflows/build.yml)
-  * CentOS / Fedora / Mageia - [![Build Status](https://copr.fedorainfracloud.org/coprs/supervillain/i2pd/package/i2pd-git/status_image/last_build.png)](https://copr.fedorainfracloud.org/coprs/supervillain/i2pd/package/i2pd-git/)
-  * Alpine, ArchLinux, openSUSE, Gentoo, Debian, Ubuntu, etc.
+* GNU/Linux (Debian, Ubuntu, etc) - [![Build on Ubuntu](https://github.com/PurpleI2P/i2pd/actions/workflows/build.yml/badge.svg)](https://github.com/PurpleI2P/i2pd/actions/workflows/build.yml)
+* CentOS, Fedora, Mageia - [![Build Status](https://copr.fedorainfracloud.org/coprs/supervillain/i2pd/package/i2pd-git/status_image/last_build.png)](https://copr.fedorainfracloud.org/coprs/supervillain/i2pd/package/i2pd-git/)
+* Alpine, ArchLinux, openSUSE, Gentoo, etc.
 * Windows - [![Build on Windows](https://github.com/PurpleI2P/i2pd/actions/workflows/build-windows.yml/badge.svg)](https://github.com/PurpleI2P/i2pd/actions/workflows/build-windows.yml)
-* Mac OS X - [![Build on OSX](https://github.com/PurpleI2P/i2pd/actions/workflows/build-osx.yml/badge.svg)](https://github.com/PurpleI2P/i2pd/actions/workflows/build-osx.yml)
-* Docker image - [![Build Status](https://img.shields.io/docker/cloud/build/purplei2p/i2pd)](https://hub.docker.com/r/purplei2p/i2pd/builds/) [![Build containers](https://github.com/PurpleI2P/i2pd/actions/workflows/docker.yml/badge.svg)](https://github.com/PurpleI2P/i2pd/actions/workflows/docker.yml)
+* Mac OS - [![Build on OSX](https://github.com/PurpleI2P/i2pd/actions/workflows/build-osx.yml/badge.svg)](https://github.com/PurpleI2P/i2pd/actions/workflows/build-osx.yml)
+* Docker image - [![Build containers](https://github.com/PurpleI2P/i2pd/actions/workflows/docker.yml/badge.svg)](https://github.com/PurpleI2P/i2pd/actions/workflows/docker.yml)
 * Snap - [![i2pd](https://snapcraft.io/i2pd/badge.svg)](https://snapcraft.io/i2pd) [![i2pd](https://snapcraft.io/i2pd/trending.svg?name=0)](https://snapcraft.io/i2pd)
 * FreeBSD - [![Build on FreeBSD](https://github.com/PurpleI2P/i2pd/actions/workflows/build-freebsd.yml/badge.svg)](https://github.com/PurpleI2P/i2pd/actions/workflows/build-freebsd.yml)
 * Android - [![Android CI](https://github.com/PurpleI2P/i2pd-android/actions/workflows/android.yml/badge.svg)](https://github.com/PurpleI2P/i2pd-android/actions/workflows/android.yml)
@@ -99,13 +99,23 @@ Current status: [![Crowdin](https://badges.crowdin.net/i2pd/localized.svg)](http
 Donations
 ---------
 
-BTC: 3MDoGJW9TLMTCDGrR9bLgWXfm6sjmgy86f  
-LTC: LKQirrYrDeTuAPnpYq5y7LVKtywfkkHi59  
-ETH: 0x9e5bac70d20d1079ceaa111127f4fb3bccce379d  
-DASH: Xw8YUrQpYzP9tZBmbjqxS3M97Q7v3vJKUF  
-ZEC: t1cTckLuXsr1dwVrK4NDzfhehss4NvMadAJ  
-GST: GbD2JSQHBHCKLa9WTHmigJRpyFgmBj4woG  
-XMR: 497pJc7X4xqKvcLBLpSUtRgWqMMyo24u4btCos3cak6gbMkpobgSU6492ztUcUBghyeHpYeczB55s38NpuHoH5WGNSPDRMH  
+**E-Mail**: ```i2porignal at yandex.com```
+
+**BTC**: ```3MDoGJW9TLMTCDGrR9bLgWXfm6sjmgy86f```
+
+**LTC**: ```LKQirrYrDeTuAPnpYq5y7LVKtywfkkHi59```
+
+**ETH**: ```0x9e5bac70d20d1079ceaa111127f4fb3bccce379d```
+
+**GST**: ```GbD2JSQHBHCKLa9WTHmigJRpyFgmBj4woG```
+
+**DASH**: ```Xw8YUrQpYzP9tZBmbjqxS3M97Q7v3vJKUF```
+
+**ZEC**: ```t1cTckLuXsr1dwVrK4NDzfhehss4NvMadAJ```
+
+**ANC**: ```AQJYweYYUqM1nVfLqfoSMpUMfzxvS4Xd7z```
+
+**XMR**: ```497pJc7X4xqKvcLBLpSUtRgWqMMyo24u4btCos3cak6gbMkpobgSU6492ztUcUBghyeHpYeczB55s38NpuHoH5WGNSPDRMH```
 
 License
 -------
